@@ -1,5 +1,5 @@
 import express from 'express';
-import { getChannelInfo, getChannelVideos, getChannelWithVideos } from '../utils/youtube.js';
+import { getChannelWithVideos } from '../utils/youtube/youtube.js';
 import { generateRSS } from '../utils/rss-generator.js';
 import { getProfileConfig } from '../utils/profile-utils.js';
 import logger from '../utils/logger.js';
@@ -30,63 +30,39 @@ router.get('/:channelIdentifier', async (req, res) => {
       }
     }
     
-    const includeStats = req.query.stats !== 'false'; // Include video stats by default
+    // Handle minDuration parameter: query param overrides env, defaults to 0
+    const minDuration = req.query.minDuration ? parseInt(req.query.minDuration) : process.env.MIN_VIDEO_DURATION ? parseInt(process.env.MIN_VIDEO_DURATION) : 0;
     
-    // Handle minDuration parameter: number, or fall back to env variable, or no filtering
-    let minDuration = null;
-    const envMinDuration = process.env.MIN_VIDEO_DURATION ? parseInt(process.env.MIN_VIDEO_DURATION) : null;
-    
-    if (req.query.minDuration !== undefined) {
-      // Query parameter has higher priority than env variable
-      const parsedMinDuration = parseInt(req.query.minDuration);
-      if (!isNaN(parsedMinDuration) && parsedMinDuration >= 0) {
-        minDuration = parsedMinDuration;
-        logger.debug('RSS', `Using minDuration from query param: ${minDuration} seconds`);
-      } else {
-        logger.warn('RSS', `Invalid minDuration parameter: ${req.query.minDuration}, must be a non-negative number`);
-        return res.status(400).json({ 
-          error: 'Invalid minDuration parameter',
-          message: 'minDuration must be a non-negative number (0 to include all videos)' 
-        });
-      }
-    } else if (envMinDuration !== null && !isNaN(envMinDuration) && envMinDuration >= 0) {
-      // Use environment variable if no query parameter provided
-      minDuration = envMinDuration;
-      logger.debug('RSS', `Using minDuration from environment: ${minDuration} seconds`);
+    // Validate minDuration
+    if (isNaN(minDuration) || minDuration < 0) {
+      return res.status(400).json({ 
+        error: 'Invalid minDuration parameter',
+        message: 'minDuration must be a non-negative number (0 to include all videos)' 
+      });
     }
-    // If minDuration is still null, no filtering will be applied
     
     // Get profile configuration (all validation/fallback handled internally)
     const { profile, profileConfig } = getProfileConfig(req.query.profile);
     logger.operation('RSS', `Generating RSS feed for channel: ${channelIdentifier}`, { 
       limit, 
-      includeStats, 
       profile, 
-      minDuration: minDuration !== null ? minDuration : 'none' 
+      minDuration 
     });
 
-    // Validate channel identifier format (can be channel ID or handle)
+    // Validate channel identifier format (can be channel ID, uploads playlist ID, or handle)
     if (!channelIdentifier || channelIdentifier.length < 3) {
       return res.status(400).json({ 
         error: 'Invalid channel identifier',
-        message: 'Channel identifier must be a valid YouTube channel ID or handle (e.g., @channelname)' 
-      });
-    }
-
-    // Check if YouTube API key is available
-    if (!process.env.YOUTUBE_API_KEY) {
-      logger.error('RSS', 'YouTube API key not configured');
-      return res.status(500).json({
-        error: 'Configuration error',
-        message: 'YouTube API key not configured'
+        message: 'Channel identifier must be a valid YouTube channel ID (UCxxx), uploads playlist ID (UUxxx), or handle (@channelname)' 
       });
     }
 
     logger.debug('RSS', `Fetching channel with videos: ${channelIdentifier}`);
     
-    // Get channel and videos
-    const result = await getChannelWithVideos(channelIdentifier, limit, { 
-      includeVideoDetails: includeStats 
+    // Let YouTube utils handle all optimization logic
+    const result = await getChannelWithVideos(channelIdentifier, { 
+      limit,
+      minDuration 
     });
     
     const { channel: channelInfo, videos } = result;
@@ -115,37 +91,8 @@ router.get('/:channelIdentifier', async (req, res) => {
       channel: channelInfo.title
     });
     
-    // Apply duration filtering if specified
-    let filteredVideos = videos;
-    if (minDuration !== null && minDuration > 0) {
-      const originalCount = videos.length;
-      filteredVideos = videos.filter(video => {
-        // Only filter if video has duration information
-        if (video.duration === undefined || video.duration === null) {
-          // Keep videos without duration info to avoid losing content
-          logger.debug('RSS', `Video ${video.id} has no duration info, keeping in feed`);
-          return true;
-        }
-        return video.duration >= minDuration;
-      });
-      
-      const filteredCount = filteredVideos.length;
-      const excludedCount = originalCount - filteredCount;
-      
-      logger.info('RSS', `Duration filtering applied: ${excludedCount} videos shorter than ${minDuration}s excluded`, {
-        originalCount,
-        filteredCount,
-        excludedCount,
-        minDuration
-      });
-    } else if (minDuration === 0) {
-      logger.debug('RSS', 'minDuration set to 0, including all videos');
-    } else {
-      logger.debug('RSS', 'No duration filtering applied');
-    }
-    
-    // Generate RSS feed with filtered videos
-    const rssXML = generateRSS(channelInfo, filteredVideos, req.get('host'), profile, profileConfig);
+    // Generate RSS feed with videos (filtering handled by YouTube utils)
+    const rssXML = generateRSS(channelInfo, videos, req.get('host'), profile, profileConfig);
 
     // Set appropriate headers for RSS
     const cacheMaxAge = process.env.RSS_CACHE_DURATION || 600; // Default: 10 minutes
@@ -155,7 +102,7 @@ router.get('/:channelIdentifier', async (req, res) => {
     });
 
     logger.success('RSS', `RSS feed generated for ${channelInfo.title}`, { 
-      videosCount: filteredVideos.length
+      videosCount: videos.length
     });
     res.send(rssXML);
 

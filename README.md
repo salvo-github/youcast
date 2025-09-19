@@ -62,11 +62,10 @@ GET /rss/{channelIdentifier}
 ```
 
 **Parameters:**
-- `channelIdentifier` - YouTube channel ID (e.g., `UC_x5XG1OV2P6uZZ5FSM9Ttw`) or handle (e.g., `@username`)
+- `channelIdentifier` - YouTube channel ID (e.g., `UC_x5XG1OV2P6uZZ5FSM9Ttw`), uploads playlist ID (e.g., `UU_x5XG1OV2P6uZZ5FSM9Ttw`), or handle (e.g., `@username`)
 
 **Query Parameters:**
 - `limit` - Number of episodes (default: `50`, max: `5000`, use `"none"` for maximum)
-- `stats` - Include video statistics (default: `true`, set to `"false"` to exclude)  
 - `minDuration` - Filter videos by minimum duration in seconds (overrides env variable)
 - `profile` - Audio profile for RSS feed items (see profile configuration)
 
@@ -75,8 +74,11 @@ GET /rss/{channelIdentifier}
 # Basic RSS feed
 curl http://localhost:3000/rss/@channelname
 
-# With custom parameters  
-curl http://localhost:3000/rss/UC_x5XG1OV2P6uZZ5FSM9Ttw?limit=10&minDuration=300&stats=false
+# With channel ID - optimal quota usage
+curl http://localhost:3000/rss/UC_x5XG1OV2P6uZZ5FSM9Ttw?limit=10
+
+# With duration filtering (requires extra API calls for video details)
+curl http://localhost:3000/rss/UC_x5XG1OV2P6uZZ5FSM9Ttw?limit=10&minDuration=300
 
 # All videos
 curl http://localhost:3000/rss/@channelname?limit=none
