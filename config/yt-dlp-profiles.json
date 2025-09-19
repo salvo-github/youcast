@@ -1,0 +1,58 @@
+{
+  "default": {
+    "description": "Extract YouTube audio without any modification (preserves original quality and format)",
+    "audioFormat": "best",
+    "contentType": "audio/webm",
+    "fileExtension": "webm",
+    "postprocessorArgs": "",
+    "additionalArgs": [
+      "--no-playlist",
+      "--prefer-ffmpeg",
+      "--format", "bestaudio[ext=webm]/bestaudio"
+    ]
+  },
+  "opus": {
+    "description": "Opus format optimized for speech with VoIP application mode",
+    "audioFormat": "opus",
+    "contentType": "audio/ogg",
+    "fileExtension": "ogg",
+    "postprocessorArgs": "ffmpeg:-threads 0 -c:a libopus -b:a 20k -vbr on -application voip -frame_duration 20 -ac 1 -ar 16000",
+    "additionalArgs": [
+      "--no-playlist",
+      "--prefer-ffmpeg"
+    ]
+  },
+  "mp3": {
+    "description": "MP3 format optimized for speech content with maximum compatibility",
+    "audioFormat": "mp3",
+    "contentType": "audio/mpeg",
+    "fileExtension": "mp3",
+    "postprocessorArgs": "ffmpeg:-threads 0 -c:a libmp3lame -b:a 32k -ac 1 -ar 22050 -q:a 7",
+    "additionalArgs": [
+      "--no-playlist",
+      "--prefer-ffmpeg"
+    ]
+  },
+  "high_quality_opus": {
+    "description": "High-quality Opus format for premium speech content",
+    "audioFormat": "opus",
+    "contentType": "audio/ogg",
+    "fileExtension": "ogg",
+    "postprocessorArgs": "ffmpeg:-threads 0 -c:a libopus -b:a 32k -vbr on -application voip -frame_duration 20 -ac 1 -ar 24000",
+    "additionalArgs": [
+      "--no-playlist",
+      "--prefer-ffmpeg"
+    ]
+  },
+  "aac": {
+    "description": "AAC format optimized for speech with efficient compression",
+    "audioFormat": "aac",
+    "contentType": "audio/aac",
+    "fileExtension": "aac",
+    "postprocessorArgs": "ffmpeg:-threads 0 -c:a aac -b:a 32k -ac 1 -ar 22050 -profile:a aac_he",
+    "additionalArgs": [
+      "--no-playlist",
+      "--prefer-ffmpeg"
+    ]
+  }
+}
