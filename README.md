@@ -82,16 +82,6 @@ curl http://localhost:3000/rss/UC_x5XG1OV2P6uZZ5FSM9Ttw?limit=10&minDuration=300
 curl http://localhost:3000/rss/@channelname?limit=none
 ```
 
-### Channel Information (Debug)
-```
-GET /rss/{channelIdentifier}/info
-```
-
-**Parameters:**
-- `channelIdentifier` - YouTube channel ID or handle
-
-**Query Parameters:** None
-
 ### Audio Streaming
 ```
 GET /audio/{videoId}
