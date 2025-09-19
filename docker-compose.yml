@@ -3,12 +3,12 @@ networks:
     external: true
     
 services:
-  youcast:
-    image: node:22.19.0
-    container_name: youcast
+  youcast-dev:
+    image: node:22.19.0-bookworm-slim 
+    container_name: youcast-dev
     networks:
       mynetwork:
-        ipv4_address: 172.20.0.57
+        ipv4_address: 172.20.0.111
     ports:
       - "3456:3000"
     volumes:
