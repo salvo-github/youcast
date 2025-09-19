@@ -1,8 +1,6 @@
 name: Build and Push Docker Image
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
     types: [closed]
@@ -14,8 +12,8 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    # Only run this job if the PR was merged (for PR events) or on direct push to main
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    # Only run this job if the PR was merged to main
+    if: github.event.pull_request.merged == true
     
     permissions:
       contents: read
