@@ -1,9 +1,23 @@
 name: Build and Push Docker Image
 
 on:
+  # Trigger on PR merge to main
   pull_request:
     branches: [main]
     types: [closed]
+  
+  # Trigger on direct push to main (backup for missed PR triggers)
+  push:
+    branches: [main]
+  
+  # Allow manual triggering
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deploy even if no changes'
+        required: false
+        default: 'false'
+        type: boolean
 
 env:
   REGISTRY: ghcr.io
@@ -12,8 +26,11 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    # Only run this job if the PR was merged to main
-    if: github.event.pull_request.merged == true
+    # Run if: PR merged to main, OR pushed to main, OR manually triggered
+    if: |
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true) ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch')
     
     permissions:
       contents: read
@@ -62,6 +79,16 @@ jobs:
         run: |
           echo "## 🐳 Docker Image Built Successfully" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Show trigger information
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "**Triggered by:** PR #${{ github.event.pull_request.number }} merge" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            echo "**Triggered by:** Direct push to main branch" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "**Triggered by:** Manual workflow dispatch" >> $GITHUB_STEP_SUMMARY
+          fi
+          
           echo "**Image Registry:** ${{ env.REGISTRY }}" >> $GITHUB_STEP_SUMMARY
           echo "**Repository:** ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
