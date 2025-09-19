@@ -168,31 +168,4 @@ router.get('/:channelIdentifier', async (req, res) => {
   }
 });
 
-// Get channel information (for testing/debugging)
-router.get('/:channelIdentifier/info', async (req, res) => {
-  try {
-    const { channelIdentifier } = req.params;
-    logger.debug('RSS', `Channel info request for: ${channelIdentifier}`);
-    
-    const channelInfo = await getChannelInfo(channelIdentifier);
-    
-    if (!channelInfo) {
-      logger.warn('RSS', `Channel info not found: ${channelIdentifier}`);
-      return res.status(404).json({ 
-        error: 'Channel not found' 
-      });
-    }
-
-    logger.info('RSS', `Channel info retrieved: ${channelInfo.title}`);
-    res.json(channelInfo);
-
-  } catch (error) {
-    logger.error('RSS', 'Channel info retrieval failed', { error: error.message, channelIdentifier });
-    res.status(500).json({ 
-      error: 'Failed to get channel information',
-      message: error.message 
-    });
-  }
-});
-
 export default router;
