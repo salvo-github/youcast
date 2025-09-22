@@ -3,8 +3,7 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm install && \
-    npm install --no-save @rollup/plugin-node-resolve @rollup/plugin-commonjs @rollup/plugin-json rollup && \
-    npm install --no-save compression helmet express-rate-limit
+    npm install --no-save @rollup/plugin-node-resolve @rollup/plugin-commonjs @rollup/plugin-json rollup compression helmet express-rate-limit
 COPY . .
 RUN cat > rollup.config.js << 'EOF'
 import { nodeResolve } from '@rollup/plugin-node-resolve';
@@ -36,7 +35,7 @@ export default {
   ]
 };
 EOF
-RUN npx rollup -c
+RUN node_modules/.bin/rollup -c
 
 # Final production stage - optimized for size and docker-compose compatibility
 FROM node:22-alpine AS production
