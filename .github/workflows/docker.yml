@@ -75,11 +75,33 @@ jobs:
           echo "🔍 Verifying built image..."
           # Get the first tag for verification
           IMAGE_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+          
+          # Validate that we have a tag
+          if [ -z "$IMAGE_TAG" ] || [ "$IMAGE_TAG" = "" ]; then
+            echo "❌ No image tag found in metadata output"
+            echo "Available tags: ${{ steps.meta.outputs.tags }}"
+            exit 1
+          fi
+          
           echo "Testing image: $IMAGE_TAG"
           
-          # Report image size
-          IMAGE_SIZE=$(docker image inspect "$IMAGE_TAG" --format='{{.Size}}' | numfmt --to=iec)
-          IMAGE_SIZE_MB=$(docker image inspect "$IMAGE_TAG" --format='{{.Size}}' | awk '{print int($1/1024/1024)}')
+          # Pull the image to inspect it locally (since build-push-action doesn't keep it local)
+          echo "📥 Pulling image for verification..."
+          docker pull "$IMAGE_TAG" || {
+            echo "❌ Failed to pull image for verification"
+            exit 1
+          }
+          
+          # Report image size with error handling
+          RAW_SIZE=$(docker image inspect "$IMAGE_TAG" --format='{{.Size}}' 2>/dev/null)
+          if [ -z "$RAW_SIZE" ] || [ "$RAW_SIZE" = "" ]; then
+            echo "⚠️  Could not determine image size"
+            IMAGE_SIZE="unknown"
+            IMAGE_SIZE_MB="0"
+          else
+            IMAGE_SIZE=$(echo "$RAW_SIZE" | numfmt --to=iec)
+            IMAGE_SIZE_MB=$(echo "$RAW_SIZE" | awk '{print int($1/1024/1024)}')
+          fi
           echo "📦 Image size: $IMAGE_SIZE (${IMAGE_SIZE_MB}MB)"
           
           # Basic image inspection
@@ -118,8 +140,10 @@ jobs:
           echo "**Repository:** ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
           echo "**Image Size:** $IMAGE_SIZE ($IMAGE_SIZE_MB MB)" >> $GITHUB_STEP_SUMMARY
           
-          # Size optimization status
-          if [ "$IMAGE_SIZE_MB" -lt 300 ]; then
+          # Size optimization status (handle unknown size)
+          if [ "$IMAGE_SIZE" = "unknown" ] || [ "$IMAGE_SIZE_MB" = "0" ]; then
+            echo "⚠️  **Size Status:** Could not determine image size" >> $GITHUB_STEP_SUMMARY
+          elif [ "$IMAGE_SIZE_MB" -lt 300 ]; then
             echo "✅ **Size Status:** Optimized (under 300MB)" >> $GITHUB_STEP_SUMMARY
           elif [ "$IMAGE_SIZE_MB" -lt 500 ]; then
             echo "⚠️  **Size Status:** Acceptable (300-500MB)" >> $GITHUB_STEP_SUMMARY
