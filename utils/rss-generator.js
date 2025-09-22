@@ -20,7 +20,7 @@ function generateRSS(channelInfo, videos, baseUrl, profile, profileConfig) {
     description: channelInfo.description || `Podcast feed for ${channelInfo.title}`,
     feed_url: `http://${baseUrl}/rss/${channelInfo.id}`,
     site_url: `https://youtube.com/channel/${channelInfo.id}`,
-    image_url: channelInfo.thumbnail,
+    image_url: channelInfo.thumbnail, // Correct syntax for RSS npm package
     managingEditor: channelInfo.title,
     webMaster: channelInfo.title,
     copyright: `© ${new Date().getFullYear()} ${channelInfo.title}`,
@@ -28,19 +28,23 @@ function generateRSS(channelInfo, videos, baseUrl, profile, profileConfig) {
     categories: ['Technology', 'Podcast'],
     pubDate: videos.length > 0 ? new Date(videos[0].publishedAt) : new Date(),
     ttl: cacheMinutes.toString(), // Cache duration from env variable
-    // Podcast-specific iTunes tags
-    itunesAuthor: channelInfo.title,
-    itunesSubtitle: channelInfo.description ? channelInfo.description.substring(0, 100) + '...' : channelInfo.title,
-    itunesSummary: channelInfo.description || `Podcast version of ${channelInfo.title} YouTube channel`,
-    itunesOwner: {
-      name: channelInfo.title,
-      email: 'noreply@youcast.local'
+    
+    // Add iTunes namespace and podcast-specific tags
+    custom_namespaces: {
+      'itunes': 'http://www.itunes.com/dtds/podcast-1.0.dtd'
     },
-    itunesExplicit: false,
-    itunesCategory: [{
-      text: 'Technology'
-    }],
-    itunesImage: channelInfo.thumbnail
+    custom_elements: [
+      {'itunes:author': channelInfo.title},
+      {'itunes:subtitle': channelInfo.description ? channelInfo.description.substring(0, 100) + '...' : channelInfo.title},
+      {'itunes:summary': channelInfo.description || `Podcast version of ${channelInfo.title} YouTube channel`},
+      {'itunes:owner': [
+        {'itunes:name': channelInfo.title},
+        {'itunes:email': 'noreply@youcast.local'}
+      ]},
+      {'itunes:explicit': 'false'},
+      {'itunes:category': {_attr: {text: 'Technology'}}},
+      {'itunes:image': {_attr: {href: channelInfo.thumbnail}}}
+    ]
   });
 
   // Use provided profile configuration
