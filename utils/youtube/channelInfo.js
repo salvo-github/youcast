@@ -56,7 +56,7 @@ export async function getChannelUUID(channelIdentifier) {
     id: channel.id,
     title: channel.snippet.title,
     description: channel.snippet.description,
-    thumbnail: channel.snippet.thumbnails?.high?.url || channel.snippet.thumbnails?.default?.url
+    thumbnail: channel.snippet.thumbnails?.medium?.url || channel.snippet.thumbnails?.high?.url || channel.snippet.thumbnails?.default?.url
   };
   
   logger.debug('YouTube', `Found channel via API: ${channelInfo.title}, generated playlist ID: ${uploadsPlaylistId}`);
