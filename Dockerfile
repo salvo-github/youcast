@@ -23,8 +23,7 @@ RUN apk add --no-cache \
 
 # Install yt-dlp efficiently
 RUN python3 -m pip install --no-cache-dir --break-system-packages yt-dlp && \
-    rm -rf /root/.cache /tmp/* /var/tmp/* && \
-    python3 -m pip uninstall -y pip setuptools
+    rm -rf /root/.cache /tmp/* /var/tmp/*
 
 WORKDIR /app
 
