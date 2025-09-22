@@ -3,11 +3,39 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm install && \
-    npm install --no-save @rollup/plugin-node-resolve @rollup/plugin-commonjs @rollup/plugin-json rollup && \
-    npm install --no-save compression helmet express-rate-limit
+    npm install --no-save @rollup/plugin-node-resolve @rollup/plugin-commonjs @rollup/plugin-json rollup compression helmet express-rate-limit
 COPY . .
-RUN echo 'import{nodeResolve}from"@rollup/plugin-node-resolve";import commonjs from"@rollup/plugin-commonjs";import json from"@rollup/plugin-json";export default{input:"server.js",output:{file:"app.bundle.js",format:"es",inlineDynamicImports:true},plugins:[nodeResolve({preferBuiltins:true}),commonjs(),json()],external:["fs","path","os","child_process","stream","events","util","url","crypto","http","https","net","tty","readline","zlib","buffer","async_hooks","dns","querystring","assert","timers","console"]};' > rollup.config.js && \
-    npx rollup -c
+RUN cat > rollup.config.js << 'EOF'
+import { nodeResolve } from '@rollup/plugin-node-resolve';
+import commonjs from '@rollup/plugin-commonjs';
+import json from '@rollup/plugin-json';
+
+export default {
+  input: 'server.js',
+  output: {
+    file: 'app.bundle.js',
+    format: 'es',
+    inlineDynamicImports: true
+  },
+  plugins: [
+    nodeResolve({
+      preferBuiltins: true,
+      exportConditions: ['node'],
+    }),
+    commonjs({
+      ignoreDynamicRequires: true,
+    }),
+    json()
+  ],
+  external: [
+    'fs', 'path', 'os', 'child_process', 'stream', 'events', 
+    'util', 'url', 'crypto', 'http', 'https', 'net', 'tty', 
+    'readline', 'zlib', 'buffer', 'async_hooks', 'dns', 
+    'querystring', 'assert', 'timers', 'console'
+  ]
+};
+EOF
+RUN node_modules/.bin/rollup -c
 
 # Final production stage - optimized for size and docker-compose compatibility
 FROM node:22-alpine AS production
