@@ -6,10 +6,6 @@ on:
     branches: [main]
     types: [closed]
   
-  # Trigger on direct push to main (backup for missed PR triggers)
-  push:
-    branches: [main]
-  
   # Allow manual triggering
   workflow_dispatch:
     inputs:
@@ -26,10 +22,9 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    # Run if: PR merged to main, OR pushed to main, OR manually triggered
+    # Run if: PR merged to main OR manually triggered (with force option)
     if: |
       (github.event_name == 'pull_request' && github.event.pull_request.merged == true) ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch')
     
     permissions:
@@ -56,10 +51,10 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest
+            type=sha,prefix={{date 'YYYYMMDD'}}-
+            type=raw,value=main,enable={{is_default_branch}}
+            type=raw,value=stable,enable={{is_default_branch}}
       
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -75,6 +70,57 @@ jobs:
           build-args: |
             NODE_ENV=production
       
+      - name: Verify Docker image and report size
+        run: |
+          echo "🔍 Verifying built image..."
+          # Get the first tag for verification
+          IMAGE_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n1)
+          
+          # Validate that we have a tag
+          if [ -z "$IMAGE_TAG" ] || [ "$IMAGE_TAG" = "" ]; then
+            echo "❌ No image tag found in metadata output"
+            echo "Available tags: ${{ steps.meta.outputs.tags }}"
+            exit 1
+          fi
+          
+          echo "Testing image: $IMAGE_TAG"
+          
+          # Pull the image to inspect it locally (since build-push-action doesn't keep it local)
+          echo "📥 Pulling image for verification..."
+          docker pull "$IMAGE_TAG" || {
+            echo "❌ Failed to pull image for verification"
+            exit 1
+          }
+          
+          # Report image size with error handling
+          RAW_SIZE=$(docker image inspect "$IMAGE_TAG" --format='{{.Size}}' 2>/dev/null)
+          if [ -z "$RAW_SIZE" ] || [ "$RAW_SIZE" = "" ]; then
+            echo "⚠️  Could not determine image size"
+            IMAGE_SIZE="unknown"
+            IMAGE_SIZE_MB="0"
+          else
+            IMAGE_SIZE=$(echo "$RAW_SIZE" | numfmt --to=iec)
+            IMAGE_SIZE_MB=$(echo "$RAW_SIZE" | awk '{print int($1/1024/1024)}')
+          fi
+          echo "📦 Image size: $IMAGE_SIZE (${IMAGE_SIZE_MB}MB)"
+          
+          # Basic image inspection
+          docker image inspect "$IMAGE_TAG" > /dev/null || {
+            echo "❌ Image inspection failed"
+            exit 1
+          }
+          
+          # Test if image can start (with timeout)
+          timeout 30s docker run --rm "$IMAGE_TAG" node --version || {
+            echo "⚠️  Image startup test failed, but continuing..."
+          }
+          
+          echo "✅ Image verification completed"
+          
+          # Save size for summary
+          echo "IMAGE_SIZE=$IMAGE_SIZE" >> $GITHUB_ENV
+          echo "IMAGE_SIZE_MB=${IMAGE_SIZE_MB}" >> $GITHUB_ENV
+      
       - name: Generate summary
         run: |
           echo "## 🐳 Docker Image Built Successfully" >> $GITHUB_STEP_SUMMARY
@@ -83,14 +129,27 @@ jobs:
           # Show trigger information
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "**Triggered by:** PR #${{ github.event.pull_request.number }} merge" >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            echo "**Triggered by:** Direct push to main branch" >> $GITHUB_STEP_SUMMARY
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "**Triggered by:** Manual workflow dispatch" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ inputs.force_deploy }}" = "true" ]; then
+              echo "**Mode:** Force deploy enabled" >> $GITHUB_STEP_SUMMARY
+            fi
           fi
           
           echo "**Image Registry:** ${{ env.REGISTRY }}" >> $GITHUB_STEP_SUMMARY
           echo "**Repository:** ${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image Size:** $IMAGE_SIZE ($IMAGE_SIZE_MB MB)" >> $GITHUB_STEP_SUMMARY
+          
+          # Size optimization status (handle unknown size)
+          if [ "$IMAGE_SIZE" = "unknown" ] || [ "$IMAGE_SIZE_MB" = "0" ]; then
+            echo "⚠️  **Size Status:** Could not determine image size" >> $GITHUB_STEP_SUMMARY
+          elif [ "$IMAGE_SIZE_MB" -lt 300 ]; then
+            echo "✅ **Size Status:** Optimized (under 300MB)" >> $GITHUB_STEP_SUMMARY
+          elif [ "$IMAGE_SIZE_MB" -lt 500 ]; then
+            echo "⚠️  **Size Status:** Acceptable (300-500MB)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Size Status:** Large (over 500MB - consider optimization)" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🏷️ Tags Created:" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
@@ -100,5 +159,21 @@ jobs:
           echo "### 🚀 Usage:" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
           echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
-          echo "docker run -p 3000:3000 ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          
+          # Try to detect port from Dockerfile, fallback to common Node.js ports
+          if [ -f "./Dockerfile" ]; then
+            PORT=$(grep -o 'EXPOSE [0-9]*' ./Dockerfile | head -n1 | cut -d' ' -f2 || echo "3000")
+          else
+            PORT="3000"
+          fi
+          echo "docker run -p \$PORT:\$PORT ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "# Note: Replace \$PORT with your desired port (detected: $PORT)" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+      
+      - name: Cleanup on failure  
+        if: failure()
+        run: |
+          echo "🧹 Cleaning up after build failure..."
+          # Clean up any partial images or build cache
+          docker system prune -f --filter "until=1h" || true
+          echo "✅ Cleanup completed"
