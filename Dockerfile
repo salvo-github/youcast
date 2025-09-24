@@ -50,8 +50,9 @@ RUN apk add --no-cache \
     dumb-init \
     && rm -rf /var/cache/apk/*
 
-# Install yt-dlp efficiently
-RUN python3 -m pip install --no-cache-dir --break-system-packages yt-dlp && \
+# Install latest yt-dlp with force upgrade to ensure YouTube compatibility
+RUN python3 -m pip install --no-cache-dir --break-system-packages --upgrade --force-reinstall yt-dlp && \
+    yt-dlp --version && \
     rm -rf /root/.cache /tmp/* /var/tmp/*
 
 WORKDIR /app

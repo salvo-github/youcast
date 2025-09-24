@@ -20,6 +20,9 @@ const LEVEL_COLORS = {
 
 const RESET_COLOR = '\x1b[0m';
 
+// Configuration for automatic string truncation
+const DEFAULT_STRING_LIMIT = 2000;  // For INFO, WARN levels
+
 class Logger {
   constructor() {
     // Get log level from environment, default to INFO
@@ -28,6 +31,33 @@ class Logger {
     
     // Log the current log level on startup
     this.log('INFO', 'Logger', `Log level set to: ${envLogLevel}`);
+  }
+
+  /**
+   * Truncate strings in an object to prevent excessively long log entries
+   * @param {any} obj - Object to process
+   * @param {number} limit - Character limit for strings
+   * @returns {any} Processed object with truncated strings
+   */
+  truncateStrings(obj, limit = DEFAULT_STRING_LIMIT) {
+    if (typeof obj === 'string') {
+      return obj.length > limit ? obj.substring(0, limit) + '...[truncated]' : obj;
+    }
+    
+    if (typeof obj !== 'object' || obj === null) {
+      return obj;
+    }
+    
+    if (Array.isArray(obj)) {
+      return obj.map(item => this.truncateStrings(item, limit));
+    }
+    
+    const result = {};
+    for (const [key, value] of Object.entries(obj)) {
+      result[key] = this.truncateStrings(value, limit);
+    }
+    
+    return result;
   }
 
   /**
@@ -54,7 +84,14 @@ class Logger {
     
     // Add metadata if provided
     if (meta && typeof meta === 'object') {
-      logLine += ` ${JSON.stringify(meta)}`;
+      // No truncation if DEBUG level is enabled or for ERROR messages
+      if (this.currentLevel >= LOG_LEVELS.DEBUG || level === 'ERROR') {
+        logLine += ` ${JSON.stringify(meta)}`;
+      } else {
+        // Truncate INFO and WARN messages when not in DEBUG mode
+        const truncatedMeta = this.truncateStrings(meta, DEFAULT_STRING_LIMIT);
+        logLine += ` ${JSON.stringify(truncatedMeta)}`;
+      }
     }
     
     // Use appropriate console method
