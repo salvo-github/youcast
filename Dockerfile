@@ -418,16 +418,13 @@ setup_cron() {
     CURRENT_USER=$(whoami)
     echo "[STARTUP] Setting up cron scheduler for user: $CURRENT_USER"
     
-    # Ensure log directory exists
-    mkdir -p /tmp/logs
-    
     # Create cron file at runtime
     CRON_FILE="/tmp/youcast-cron"
-    echo "0 * * * * CRON_TRIGGER=hourly /usr/local/bin/update-deps.sh >> /tmp/logs/cron.log 2>&1" > "$CRON_FILE"
+    echo "0 * * * * CRON_TRIGGER=hourly /usr/local/bin/update-deps.sh" > "$CRON_FILE"
     
     # Start Supercronic in background (rootless cron scheduler)
     if command -v supercronic >/dev/null 2>&1; then
-        supercronic "$CRON_FILE" >/dev/null 2>&1 &
+        supercronic "$CRON_FILE" &
         echo "[STARTUP] Supercronic started successfully - hourly dependency updates enabled"
     else
         echo "[STARTUP] Warning: Supercronic not found. Dependency updates will only run on startup."
@@ -442,10 +439,7 @@ exec "$@"
 EOF
 
 # Make scripts executable and create directories
-RUN chmod +x /usr/local/bin/update-deps.sh /usr/local/bin/update-ffmpeg.sh /usr/local/bin/startup.sh && \
-    mkdir -p /var/log /tmp/logs && \
-    touch /tmp/logs/cron.log && \
-    chmod 666 /tmp/logs/cron.log
+RUN chmod +x /usr/local/bin/update-deps.sh /usr/local/bin/update-ffmpeg.sh /usr/local/bin/startup.sh
 
 # NO USER directive - let docker-compose handle user management
 
