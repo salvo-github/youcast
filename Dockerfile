@@ -48,8 +48,12 @@ RUN apk add --no-cache \
     ca-certificates \
     curl \
     dumb-init \
-    dcron \
     && rm -rf /var/cache/apk/*
+
+# Install Supercronic (rootless cron for Docker)
+RUN curl -fsSL https://github.com/aptible/supercronic/releases/download/v0.2.29/supercronic-linux-amd64 \
+    -o /usr/local/bin/supercronic && \
+    chmod +x /usr/local/bin/supercronic
 
 # Install latest yt-dlp with force upgrade to ensure YouTube compatibility
 RUN python3 -m pip install --no-cache-dir --break-system-packages --upgrade --force-reinstall yt-dlp && \
@@ -160,39 +164,38 @@ RUN cat > /usr/local/bin/startup.sh << 'EOF'
 # Run dependency updates on startup
 /usr/local/bin/update-deps.sh
 
-# Start cron daemon (job already configured at build time)
+# Setup and start Supercronic at runtime
 setup_cron() {
     CURRENT_USER=$(whoami)
-    echo "[STARTUP] Starting cron daemon for user: $CURRENT_USER"
+    echo "[STARTUP] Setting up cron scheduler for user: $CURRENT_USER"
     
     # Ensure log directory exists
     mkdir -p /tmp/logs
     
-    # Start cron daemon (cron job was configured at build time)
-    if crond -b -l 8 2>/dev/null; then
-        echo "[STARTUP] Cron daemon started successfully - hourly dependency updates enabled"
+    # Create cron file at runtime
+    CRON_FILE="/tmp/youcast-cron"
+    echo "0 * * * * CRON_TRIGGER=hourly /usr/local/bin/update-deps.sh >> /tmp/logs/cron.log 2>&1" > "$CRON_FILE"
+    
+    # Start Supercronic in background (rootless cron scheduler)
+    if supercronic "$CRON_FILE" >/dev/null 2>&1 &; then
+        echo "[STARTUP] Supercronic started successfully - hourly dependency updates enabled"
     else
-        echo "[STARTUP] Warning: Could not start cron daemon. Dependency updates will only run on startup."
+        echo "[STARTUP] Warning: Could not start Supercronic. Dependency updates will only run on startup."
     fi
 }
 
-# Start cron daemon
+# Setup and start cron scheduler
 setup_cron
 
 # Execute the main application
 exec "$@"
 EOF
 
-# Make scripts executable and set up cron at build time
+# Make scripts executable and create directories
 RUN chmod +x /usr/local/bin/update-deps.sh /usr/local/bin/startup.sh && \
     mkdir -p /var/log /tmp/logs && \
     touch /tmp/logs/cron.log && \
     chmod 666 /tmp/logs/cron.log
-
-# Configure cron job at BUILD TIME (when we have root permissions)
-RUN echo "0 * * * * CRON_TRIGGER=hourly /usr/local/bin/update-deps.sh >> /tmp/logs/cron.log 2>&1" > /tmp/youcast-cron && \
-    crontab /tmp/youcast-cron && \
-    rm /tmp/youcast-cron
 
 # NO USER directive - let docker-compose handle user management
 
