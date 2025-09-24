@@ -177,10 +177,11 @@ setup_cron() {
     echo "0 * * * * CRON_TRIGGER=hourly /usr/local/bin/update-deps.sh >> /tmp/logs/cron.log 2>&1" > "$CRON_FILE"
     
     # Start Supercronic in background (rootless cron scheduler)
-    if supercronic "$CRON_FILE" >/dev/null 2>&1 &; then
+    if command -v supercronic >/dev/null 2>&1; then
+        supercronic "$CRON_FILE" >/dev/null 2>&1 &
         echo "[STARTUP] Supercronic started successfully - hourly dependency updates enabled"
     else
-        echo "[STARTUP] Warning: Could not start Supercronic. Dependency updates will only run on startup."
+        echo "[STARTUP] Warning: Supercronic not found. Dependency updates will only run on startup."
     fi
 }
 
