@@ -29,8 +29,56 @@ class Logger {
     const envLogLevel = (process.env.LOG_LEVEL || 'INFO').toUpperCase();
     this.currentLevel = LOG_LEVELS[envLogLevel] !== undefined ? LOG_LEVELS[envLogLevel] : LOG_LEVELS.INFO;
     
-    // Log the current log level on startup
-    this.log('INFO', 'Logger', `Log level set to: ${envLogLevel}`);
+    // Get timezone from environment, default to UTC
+    this.timezone = process.env.TZ || 'UTC';
+    
+    // Validate timezone
+    try {
+      new Intl.DateTimeFormat('en', { timeZone: this.timezone });
+    } catch (error) {
+      console.warn(`Invalid timezone "${this.timezone}", falling back to UTC`);
+      this.timezone = 'UTC';
+    }
+    
+    // Log the current configuration on startup
+    this.log('INFO', 'Logger', `Log level set to: ${envLogLevel}, Timezone: ${this.timezone}`);
+  }
+
+  /**
+   * Format timestamp according to configured timezone
+   * @returns {string} Formatted timestamp string
+   */
+  formatTimestamp() {
+    const now = new Date();
+    
+    // Format date and time components
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: this.timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
+    
+    const parts = formatter.formatToParts(now);
+    const dateParts = {};
+    parts.forEach(part => {
+      dateParts[part.type] = part.value;
+    });
+    
+    // Format as ISO-like string without milliseconds
+    const timestamp = `${dateParts.year}-${dateParts.month}-${dateParts.day}T${dateParts.hour}:${dateParts.minute}:${dateParts.second}`;
+    
+    // Add timezone suffix
+    if (this.timezone === 'UTC') {
+      return `${timestamp}Z`;
+    } else {
+      // For non-UTC timezones, show the timezone name
+      return `${timestamp} (${this.timezone})`;
+    }
   }
 
   /**
@@ -75,7 +123,7 @@ class Logger {
       return;
     }
 
-    const timestamp = new Date().toISOString();
+    const timestamp = this.formatTimestamp();
     const color = LEVEL_COLORS[level] || '';
     const levelStr = level.padEnd(5);
     const componentStr = component.padEnd(15);

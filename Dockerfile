@@ -3,12 +3,13 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm install && \
-    npm install --no-save @rollup/plugin-node-resolve @rollup/plugin-commonjs @rollup/plugin-json rollup compression helmet express-rate-limit
+    npm install --no-save @rollup/plugin-node-resolve @rollup/plugin-commonjs @rollup/plugin-json @rollup/plugin-terser rollup compression helmet express-rate-limit
 COPY . .
 RUN cat > rollup.config.js << 'EOF'
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
 import json from '@rollup/plugin-json';
+import terser from '@rollup/plugin-terser';
 
 export default {
   input: 'server.js',
@@ -25,7 +26,21 @@ export default {
     commonjs({
       ignoreDynamicRequires: true,
     }),
-    json()
+    json(),
+    terser({
+      compress: {
+        drop_console: false, // Keep console logs for server debugging
+        drop_debugger: true,
+        pure_funcs: ['console.debug'],
+      },
+      mangle: {
+        keep_classnames: false,
+        keep_fnames: false, // More aggressive minification
+      },
+      format: {
+        comments: false, // Remove comments to reduce size
+      }
+    })
   ],
   external: [
     'fs', 'path', 'os', 'child_process', 'stream', 'events', 
@@ -437,7 +452,8 @@ RUN chmod +x /usr/local/bin/update-deps.sh /usr/local/bin/update-ffmpeg.sh /usr/
 ENV NODE_ENV=production \
     PORT=3000 \
     NODE_OPTIONS="--enable-source-maps=false --max-old-space-size=256" \
-    NODE_TLS_REJECT_UNAUTHORIZED=1
+    NODE_TLS_REJECT_UNAUTHORIZED=1 \
+    TZ=UTC
 
 EXPOSE 3000
 
