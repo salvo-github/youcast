@@ -48,10 +48,12 @@ RUN apk add --no-cache \
     ca-certificates \
     curl \
     dumb-init \
+    dcron \
     && rm -rf /var/cache/apk/*
 
-# Install yt-dlp efficiently
-RUN python3 -m pip install --no-cache-dir --break-system-packages yt-dlp && \
+# Install latest yt-dlp with force upgrade to ensure YouTube compatibility
+RUN python3 -m pip install --no-cache-dir --break-system-packages --upgrade --force-reinstall yt-dlp && \
+    yt-dlp --version && \
     rm -rf /root/.cache /tmp/* /var/tmp/*
 
 WORKDIR /app
@@ -63,6 +65,88 @@ COPY --from=builder /app/config ./config
 # Create symlink for config path resolution and make directories accessible
 RUN ln -sf /app/config /config && \
     chmod -R 755 /app
+
+# Create update script for dependencies
+RUN cat > /usr/local/bin/update-deps.sh << 'EOF'
+#!/bin/sh
+set -e
+
+LOG_PREFIX="[UPDATE-DEPS]"
+echo "$LOG_PREFIX Checking for dependency updates..."
+
+# Function to log with timestamp
+log() {
+    echo "$LOG_PREFIX $(date '+%Y-%m-%d %H:%M:%S') $1"
+}
+
+# Check and update yt-dlp
+log "Checking yt-dlp version..."
+CURRENT_YT_DLP=$(yt-dlp --version 2>/dev/null || echo "not installed")
+log "Current yt-dlp: $CURRENT_YT_DLP"
+
+# Get latest yt-dlp version from GitHub API with timeout
+LATEST_YT_DLP=""
+if command -v curl >/dev/null 2>&1; then
+    LATEST_YT_DLP=$(curl -s --connect-timeout 10 --max-time 15 https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 2>/dev/null || echo "")
+fi
+
+if [ -n "$LATEST_YT_DLP" ] && [ "$CURRENT_YT_DLP" != "$LATEST_YT_DLP" ]; then
+    log "Updating yt-dlp from $CURRENT_YT_DLP to $LATEST_YT_DLP..."
+    if python3 -m pip install --no-cache-dir --break-system-packages --upgrade --force-reinstall yt-dlp >/dev/null 2>&1; then
+        log "yt-dlp updated successfully to $(yt-dlp --version)"
+    else
+        log "Failed to update yt-dlp, continuing with current version"
+    fi
+elif [ -n "$LATEST_YT_DLP" ]; then
+    log "yt-dlp is up to date ($CURRENT_YT_DLP)"
+else
+    log "Could not check for yt-dlp updates (network issue), using current version"
+fi
+
+# Check and update ffmpeg (Alpine packages)
+log "Checking ffmpeg version..."
+CURRENT_FFMPEG=$(ffmpeg -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "not installed")
+log "Current ffmpeg: $CURRENT_FFMPEG"
+
+# Update Alpine package index and upgrade ffmpeg if available
+if apk update >/dev/null 2>&1; then
+    if apk upgrade ffmpeg >/dev/null 2>&1; then
+        NEW_FFMPEG=$(ffmpeg -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
+        if [ "$CURRENT_FFMPEG" != "$NEW_FFMPEG" ]; then
+            log "ffmpeg updated from $CURRENT_FFMPEG to $NEW_FFMPEG"
+        else
+            log "ffmpeg is up to date ($CURRENT_FFMPEG)"
+        fi
+    else
+        log "ffmpeg is up to date ($CURRENT_FFMPEG)"
+    fi
+else
+    log "Could not update package index, using current ffmpeg version"
+fi
+
+log "Dependency check complete!"
+EOF
+
+# Create startup script that runs updates then starts the app
+RUN cat > /usr/local/bin/startup.sh << 'EOF'
+#!/bin/sh
+set -e
+
+# Run dependency updates on startup
+/usr/local/bin/update-deps.sh
+
+# Set up hourly cron job for updates
+echo "0 * * * * /usr/local/bin/update-deps.sh >> /var/log/cron.log 2>&1" > /var/spool/cron/crontabs/root
+
+# Start cron daemon in background
+crond -b -l 8
+
+# Execute the main application
+exec "$@"
+EOF
+
+# Make scripts executable
+RUN chmod +x /usr/local/bin/update-deps.sh /usr/local/bin/startup.sh
 
 # NO USER directive - let docker-compose handle user management
 
@@ -78,4 +162,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=2 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT}/health || exit 1
 
 ENTRYPOINT ["dumb-init", "--"]
-CMD ["node", "app.bundle.js"]
+CMD ["/usr/local/bin/startup.sh", "node", "app.bundle.js"]

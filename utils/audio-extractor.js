@@ -19,6 +19,15 @@ async function extractAudioStream(videoId, profile, profileConfig) {
 
       logger.operation('AudioExtractor', `Extracting: ${videoId} (profile: ${profile})`);
       logger.debug('AudioExtractor', `Using profile: ${profileConfig.description}`);
+      
+      // Log yt-dlp version for debugging
+      try {
+        const { execSync } = require('child_process');
+        const ytdlpVersion = execSync('yt-dlp --version', { encoding: 'utf8', timeout: 5000 }).trim();
+        logger.debug('AudioExtractor', `yt-dlp version: ${ytdlpVersion}`);
+      } catch (versionError) {
+        logger.warn('AudioExtractor', `Could not get yt-dlp version: ${versionError.message}`);
+      }
 
       // Get number of logical CPUs for concurrent processing
       const cpuCount = cpus().length;
@@ -36,9 +45,10 @@ async function extractAudioStream(videoId, profile, profileConfig) {
           '-f', 'bestaudio',
           '--output', '-',
           '--no-playlist',
-          '--prefer-ffmpeg',
           videoUrl
         ];
+        
+        logger.debug('AudioExtractor', `Executing yt-dlp: yt-dlp ${ytdlpArgs.join(' ')}`);
         
         // Step 2: ffmpeg converts to target format using profile's postprocessor args
         // Parse the postprocessorArgs: "ffmpeg:-threads 0 -c:a libmp3lame -b:a 64k -ac 1 -ar 22050"
@@ -96,8 +106,8 @@ async function extractAudioStream(videoId, profile, profileConfig) {
           if (hasError) return;
           if (code !== 0) {
             hasError = true;
-            logger.error('AudioExtractor', `yt-dlp failed`, { videoId, exitCode: code, stderr: stderr.substring(0, 300) });
-            reject(new Error(`yt-dlp failed with exit code ${code}`));
+            logger.error('AudioExtractor', `yt-dlp failed`, { videoId, exitCode: code, stderr });
+            reject(new Error(`yt-dlp failed with exit code ${code}: ${stderr}`));
           }
         });
         
@@ -133,6 +143,7 @@ async function extractAudioStream(videoId, profile, profileConfig) {
           videoUrl
         ];
         
+        logger.debug('AudioExtractor', `Executing yt-dlp: yt-dlp ${args.join(' ')}`);
         const ytdlp = spawn('yt-dlp', args);
         const audioStream = new PassThrough();
         
@@ -174,7 +185,7 @@ async function extractAudioStream(videoId, profile, profileConfig) {
         // Handle process completion
         ytdlp.on('close', (code) => {
           if (code !== 0 && !streamStarted) {
-            logger.error('AudioExtractor', `yt-dlp failed`, { videoId, exitCode: code, stderr: stderr.substring(0, 500) });
+            logger.error('AudioExtractor', `yt-dlp failed`, { videoId, exitCode: code, stderr });
             reject(new Error(`yt-dlp failed with exit code ${code}: ${stderr}`));
           } else if (streamStarted) {
             logger.success('AudioExtractor', `Completed direct streaming: ${videoId}`);
