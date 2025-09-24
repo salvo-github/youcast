@@ -130,24 +130,29 @@ EOF
 # Create startup script that runs updates then starts the app
 RUN cat > /usr/local/bin/startup.sh << 'EOF'
 #!/bin/sh
-set -e
 
 # Run dependency updates on startup
 /usr/local/bin/update-deps.sh
 
-# Set up hourly cron job for current user
+# Set up hourly cron job for current user (fail gracefully)
 setup_cron() {
     CURRENT_USER=$(whoami)
     echo "[STARTUP] Setting up cron for user: $CURRENT_USER"
     
     # Create user crontab in writable location
     mkdir -p /tmp/logs
-    echo "0 * * * * /usr/local/bin/update-deps.sh >> /tmp/logs/cron.log 2>&1" | crontab -
     
-    # Start cron daemon for current user
-    crond -b -l 8
-    
-    echo "[STARTUP] Hourly cron job set up successfully for user: $CURRENT_USER"
+    # Try to set up cron, but don't fail if permissions are denied
+    if echo "0 * * * * /usr/local/bin/update-deps.sh >> /tmp/logs/cron.log 2>&1" | crontab - 2>/dev/null; then
+        # Start cron daemon for current user
+        if crond -b -l 8 2>/dev/null; then
+            echo "[STARTUP] Hourly cron job set up successfully for user: $CURRENT_USER"
+        else
+            echo "[STARTUP] Warning: Could not start cron daemon (permission denied). Dependency updates will only run on startup."
+        fi
+    else
+        echo "[STARTUP] Warning: Could not set up crontab (permission denied). Dependency updates will only run on startup."
+    fi
 }
 
 # Call setup function
