@@ -72,13 +72,8 @@ class Logger {
     // Format as ISO-like string without milliseconds
     const timestamp = `${dateParts.year}-${dateParts.month}-${dateParts.day}T${dateParts.hour}:${dateParts.minute}:${dateParts.second}`;
     
-    // Add timezone suffix
-    if (this.timezone === 'UTC') {
-      return `${timestamp}Z`;
-    } else {
-      // For non-UTC timezones, show the timezone name
-      return `${timestamp} (${this.timezone})`;
-    }
+    // Add Z suffix for consistent timestamp format
+    return `${timestamp}Z`;
   }
 
   /**
