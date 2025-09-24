@@ -98,7 +98,12 @@ log "Current yt-dlp: $CURRENT_YT_DLP"
 # Get latest yt-dlp version from GitHub API with timeout
 LATEST_YT_DLP=""
 if command -v curl >/dev/null 2>&1; then
-    LATEST_YT_DLP=$(curl -s --connect-timeout 10 --max-time 15 https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest 2>/dev/null | grep '"tag_name"' | cut -d'"' -f4 2>/dev/null || echo "")
+    # More robust JSON parsing for tag_name
+    LATEST_YT_DLP=$(curl -s --connect-timeout 10 --max-time 15 https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest 2>/dev/null | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n1)
+    # Fallback if sed parsing fails
+    if [ -z "$LATEST_YT_DLP" ]; then
+        LATEST_YT_DLP=$(curl -s --connect-timeout 10 --max-time 15 https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest 2>/dev/null | grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4)
+    fi
 fi
 
 if [ -n "$LATEST_YT_DLP" ] && [ "$CURRENT_YT_DLP" != "$LATEST_YT_DLP" ]; then
@@ -114,25 +119,33 @@ else
     log "Could not check for yt-dlp updates (network issue), using current version"
 fi
 
-# Check and update ffmpeg (Alpine packages)
+# Check and update ffmpeg (rootless compatible approach)
 log "Checking ffmpeg version..."
 CURRENT_FFMPEG=$(ffmpeg -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "not installed")
 log "Current ffmpeg: $CURRENT_FFMPEG"
 
-# Update Alpine package index and upgrade ffmpeg if available
-if apk update >/dev/null 2>&1; then
-    if apk upgrade ffmpeg >/dev/null 2>&1; then
-        NEW_FFMPEG=$(ffmpeg -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
-        if [ "$CURRENT_FFMPEG" != "$NEW_FFMPEG" ]; then
-            log "ffmpeg updated from $CURRENT_FFMPEG to $NEW_FFMPEG"
-        else
-            log "ffmpeg is up to date ($CURRENT_FFMPEG)"
-        fi
+# For rootless Docker, we can't use apk update/upgrade (requires root)
+# Instead, check if we can get latest static build info (but don't actually update)
+# This maintains the update check functionality without breaking in rootless environment
+
+# Try to get latest ffmpeg version info from johnvansickle static builds
+LATEST_FFMPEG=""
+if command -v curl >/dev/null 2>&1; then
+    # Get version from johnvansickle's static builds (commonly used for Docker)
+    LATEST_FFMPEG=$(curl -s --connect-timeout 10 --max-time 15 "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz.md5" 2>/dev/null | head -n1 | grep -o 'ffmpeg-[0-9][^-]*' | sed 's/ffmpeg-//' || echo "")
+    
+    # If that fails, try a different approach or skip version check
+    if [ -z "$LATEST_FFMPEG" ]; then
+        log "Could not check for latest ffmpeg version (network/parsing issue)"
+        log "ffmpeg is available and functional ($CURRENT_FFMPEG)"
+    elif [ "$CURRENT_FFMPEG" != "$LATEST_FFMPEG" ]; then
+        log "ffmpeg could be updated from $CURRENT_FFMPEG to $LATEST_FFMPEG"
+        log "Note: Runtime ffmpeg updates require rebuilding the Docker image in rootless mode"
     else
         log "ffmpeg is up to date ($CURRENT_FFMPEG)"
     fi
 else
-    log "Could not update package index, using current ffmpeg version"
+    log "ffmpeg is available and functional ($CURRENT_FFMPEG)"
 fi
 
 log "Dependency check complete!"
@@ -147,27 +160,23 @@ RUN cat > /usr/local/bin/startup.sh << 'EOF'
 # Run dependency updates on startup
 /usr/local/bin/update-deps.sh
 
-# Set up hourly cron job for current user by writing directly to cron file
+# Set up hourly cron job using /etc/cron.d/ (rootless compatible)
 setup_cron() {
     CURRENT_USER=$(whoami)
     echo "[STARTUP] Setting up cron for user: $CURRENT_USER"
     
-    # Create directories
-    mkdir -p /tmp/logs /var/spool/cron/crontabs
+    # Create log directory
+    mkdir -p /tmp/logs
     
-    # Create the cron file path
-    CRON_FILE="/var/spool/cron/crontabs/$CURRENT_USER"
+    # Use /etc/cron.d/ which is more compatible with rootless Docker
+    CRON_FILE="/etc/cron.d/youcast-updates"
     
-    # Write cron job directly to user's cron file (bypass crontab command)
-    echo "0 * * * * CRON_TRIGGER=hourly /usr/local/bin/update-deps.sh >> /tmp/logs/cron.log 2>&1" > "$CRON_FILE"
+    # Write cron job to /etc/cron.d/ with proper format: min hour day month dayofweek user command
+    echo "0 * * * * $CURRENT_USER CRON_TRIGGER=hourly /usr/local/bin/update-deps.sh >> /tmp/logs/cron.log 2>&1" > "$CRON_FILE"
     
-    # Set proper ownership and permissions
+    # Set proper permissions for /etc/cron.d/ file
     if [ -f "$CRON_FILE" ]; then
-        # Set file permissions (600 = read/write for owner only)
-        chmod 600 "$CRON_FILE" 2>/dev/null || echo "[STARTUP] Warning: Could not set cron file permissions"
-        
-        # Ensure cron directories have proper permissions
-        chmod 755 /var/spool/cron/crontabs 2>/dev/null || echo "[STARTUP] Warning: Could not set cron directory permissions"
+        chmod 644 "$CRON_FILE" 2>/dev/null || echo "[STARTUP] Warning: Could not set cron file permissions"
         
         # Start cron daemon
         if crond -b -l 8 2>/dev/null; then
@@ -190,8 +199,10 @@ EOF
 
 # Make scripts executable and set up cron directories
 RUN chmod +x /usr/local/bin/update-deps.sh /usr/local/bin/startup.sh && \
-    mkdir -p /var/spool/cron/crontabs /var/log && \
-    chmod 755 /var/spool/cron/crontabs
+    mkdir -p /etc/cron.d /var/log /tmp/logs && \
+    chmod 755 /etc/cron.d && \
+    touch /var/log/cron.log && \
+    chmod 666 /var/log/cron.log
 
 # NO USER directive - let docker-compose handle user management
 
