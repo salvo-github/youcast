@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import { PassThrough } from 'stream';
 import { cpus } from 'os';
 import logger from './logger.js';
@@ -22,7 +22,6 @@ async function extractAudioStream(videoId, profile, profileConfig) {
       
       // Log yt-dlp version for debugging
       try {
-        const { execSync } = require('child_process');
         const ytdlpVersion = execSync('yt-dlp --version', { encoding: 'utf8', timeout: 5000 }).trim();
         logger.debug('AudioExtractor', `yt-dlp version: ${ytdlpVersion}`);
       } catch (versionError) {
