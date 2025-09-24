@@ -160,49 +160,39 @@ RUN cat > /usr/local/bin/startup.sh << 'EOF'
 # Run dependency updates on startup
 /usr/local/bin/update-deps.sh
 
-# Set up hourly cron job using /etc/cron.d/ (rootless compatible)
+# Start cron daemon (job already configured at build time)
 setup_cron() {
     CURRENT_USER=$(whoami)
-    echo "[STARTUP] Setting up cron for user: $CURRENT_USER"
+    echo "[STARTUP] Starting cron daemon for user: $CURRENT_USER"
     
-    # Create log directory
+    # Ensure log directory exists
     mkdir -p /tmp/logs
     
-    # Use /etc/cron.d/ which is more compatible with rootless Docker
-    CRON_FILE="/etc/cron.d/youcast-updates"
-    
-    # Write cron job to /etc/cron.d/ with proper format: min hour day month dayofweek user command
-    echo "0 * * * * $CURRENT_USER CRON_TRIGGER=hourly /usr/local/bin/update-deps.sh >> /tmp/logs/cron.log 2>&1" > "$CRON_FILE"
-    
-    # Set proper permissions for /etc/cron.d/ file
-    if [ -f "$CRON_FILE" ]; then
-        chmod 644 "$CRON_FILE" 2>/dev/null || echo "[STARTUP] Warning: Could not set cron file permissions"
-        
-        # Start cron daemon
-        if crond -b -l 8 2>/dev/null; then
-            echo "[STARTUP] Hourly cron job set up successfully for user: $CURRENT_USER"
-            echo "[STARTUP] Cron file created at: $CRON_FILE"
-        else
-            echo "[STARTUP] Warning: Could not start cron daemon. Dependency updates will only run on startup."
-        fi
+    # Start cron daemon (cron job was configured at build time)
+    if crond -b -l 8 2>/dev/null; then
+        echo "[STARTUP] Cron daemon started successfully - hourly dependency updates enabled"
     else
-        echo "[STARTUP] Error: Could not create cron file at $CRON_FILE"
+        echo "[STARTUP] Warning: Could not start cron daemon. Dependency updates will only run on startup."
     fi
 }
 
-# Call setup function
+# Start cron daemon
 setup_cron
 
 # Execute the main application
 exec "$@"
 EOF
 
-# Make scripts executable and set up cron directories
+# Make scripts executable and set up cron at build time
 RUN chmod +x /usr/local/bin/update-deps.sh /usr/local/bin/startup.sh && \
-    mkdir -p /etc/cron.d /var/log /tmp/logs && \
-    chmod 755 /etc/cron.d && \
-    touch /var/log/cron.log && \
-    chmod 666 /var/log/cron.log
+    mkdir -p /var/log /tmp/logs && \
+    touch /tmp/logs/cron.log && \
+    chmod 666 /tmp/logs/cron.log
+
+# Configure cron job at BUILD TIME (when we have root permissions)
+RUN echo "0 * * * * CRON_TRIGGER=hourly /usr/local/bin/update-deps.sh >> /tmp/logs/cron.log 2>&1" > /tmp/youcast-cron && \
+    crontab /tmp/youcast-cron && \
+    rm /tmp/youcast-cron
 
 # NO USER directive - let docker-compose handle user management
 
