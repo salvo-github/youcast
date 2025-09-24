@@ -3,12 +3,13 @@ FROM node:22-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm install && \
-    npm install --no-save @rollup/plugin-node-resolve @rollup/plugin-commonjs @rollup/plugin-json rollup compression helmet express-rate-limit
+    npm install --no-save @rollup/plugin-node-resolve @rollup/plugin-commonjs @rollup/plugin-json @rollup/plugin-terser rollup compression helmet express-rate-limit
 COPY . .
 RUN cat > rollup.config.js << 'EOF'
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 import commonjs from '@rollup/plugin-commonjs';
 import json from '@rollup/plugin-json';
+import terser from '@rollup/plugin-terser';
 
 export default {
   input: 'server.js',
@@ -25,7 +26,21 @@ export default {
     commonjs({
       ignoreDynamicRequires: true,
     }),
-    json()
+    json(),
+    terser({
+      compress: {
+        drop_console: false, // Keep console logs for server debugging
+        drop_debugger: true,
+        pure_funcs: ['console.debug'],
+      },
+      mangle: {
+        keep_classnames: false,
+        keep_fnames: false, // More aggressive minification
+      },
+      format: {
+        comments: false, // Remove comments to reduce size
+      }
+    })
   ],
   external: [
     'fs', 'path', 'os', 'child_process', 'stream', 'events', 
@@ -403,16 +418,13 @@ setup_cron() {
     CURRENT_USER=$(whoami)
     echo "[STARTUP] Setting up cron scheduler for user: $CURRENT_USER"
     
-    # Ensure log directory exists
-    mkdir -p /tmp/logs
-    
     # Create cron file at runtime
     CRON_FILE="/tmp/youcast-cron"
-    echo "0 * * * * CRON_TRIGGER=hourly /usr/local/bin/update-deps.sh >> /tmp/logs/cron.log 2>&1" > "$CRON_FILE"
+    echo "0 * * * * CRON_TRIGGER=hourly /usr/local/bin/update-deps.sh" > "$CRON_FILE"
     
     # Start Supercronic in background (rootless cron scheduler)
     if command -v supercronic >/dev/null 2>&1; then
-        supercronic "$CRON_FILE" >/dev/null 2>&1 &
+        supercronic "$CRON_FILE" &
         echo "[STARTUP] Supercronic started successfully - hourly dependency updates enabled"
     else
         echo "[STARTUP] Warning: Supercronic not found. Dependency updates will only run on startup."
@@ -427,17 +439,15 @@ exec "$@"
 EOF
 
 # Make scripts executable and create directories
-RUN chmod +x /usr/local/bin/update-deps.sh /usr/local/bin/update-ffmpeg.sh /usr/local/bin/startup.sh && \
-    mkdir -p /var/log /tmp/logs && \
-    touch /tmp/logs/cron.log && \
-    chmod 666 /tmp/logs/cron.log
+RUN chmod +x /usr/local/bin/update-deps.sh /usr/local/bin/update-ffmpeg.sh /usr/local/bin/startup.sh
 
 # NO USER directive - let docker-compose handle user management
 
 ENV NODE_ENV=production \
     PORT=3000 \
     NODE_OPTIONS="--enable-source-maps=false --max-old-space-size=256" \
-    NODE_TLS_REJECT_UNAUTHORIZED=1
+    NODE_TLS_REJECT_UNAUTHORIZED=1 \
+    TZ=UTC
 
 EXPOSE 3000
 
