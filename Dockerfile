@@ -72,12 +72,23 @@ RUN cat > /usr/local/bin/update-deps.sh << 'EOF'
 set -e
 
 LOG_PREFIX="[UPDATE-DEPS]"
-echo "$LOG_PREFIX Checking for dependency updates..."
 
 # Function to log with timestamp
 log() {
     echo "$LOG_PREFIX $(date '+%Y-%m-%d %H:%M:%S') $1"
 }
+
+# Create a unique session ID for this run
+SESSION_ID="$(date '+%Y%m%d-%H%M%S')-$$"
+
+log "=========================================="
+log "Starting dependency update session: $SESSION_ID"
+log "Triggered by: ${CRON_TRIGGER:-startup}"
+log "User: $(whoami)"
+log "Working directory: $(pwd)"
+log "=========================================="
+
+log "Checking for dependency updates..."
 
 # Check and update yt-dlp
 log "Checking yt-dlp version..."
@@ -125,6 +136,8 @@ else
 fi
 
 log "Dependency check complete!"
+log "Session $SESSION_ID finished successfully"
+log "=========================================="
 EOF
 
 # Create startup script that runs updates then starts the app
@@ -134,24 +147,37 @@ RUN cat > /usr/local/bin/startup.sh << 'EOF'
 # Run dependency updates on startup
 /usr/local/bin/update-deps.sh
 
-# Set up hourly cron job for current user (fail gracefully)
+# Set up hourly cron job for current user by writing directly to cron file
 setup_cron() {
     CURRENT_USER=$(whoami)
     echo "[STARTUP] Setting up cron for user: $CURRENT_USER"
     
-    # Create user crontab in writable location
-    mkdir -p /tmp/logs
+    # Create directories
+    mkdir -p /tmp/logs /var/spool/cron/crontabs
     
-    # Try to set up cron, but don't fail if permissions are denied
-    if echo "0 * * * * /usr/local/bin/update-deps.sh >> /tmp/logs/cron.log 2>&1" | crontab - 2>/dev/null; then
-        # Start cron daemon for current user
+    # Create the cron file path
+    CRON_FILE="/var/spool/cron/crontabs/$CURRENT_USER"
+    
+    # Write cron job directly to user's cron file (bypass crontab command)
+    echo "0 * * * * CRON_TRIGGER=hourly /usr/local/bin/update-deps.sh >> /tmp/logs/cron.log 2>&1" > "$CRON_FILE"
+    
+    # Set proper ownership and permissions
+    if [ -f "$CRON_FILE" ]; then
+        # Set file permissions (600 = read/write for owner only)
+        chmod 600 "$CRON_FILE" 2>/dev/null || echo "[STARTUP] Warning: Could not set cron file permissions"
+        
+        # Ensure cron directories have proper permissions
+        chmod 755 /var/spool/cron/crontabs 2>/dev/null || echo "[STARTUP] Warning: Could not set cron directory permissions"
+        
+        # Start cron daemon
         if crond -b -l 8 2>/dev/null; then
             echo "[STARTUP] Hourly cron job set up successfully for user: $CURRENT_USER"
+            echo "[STARTUP] Cron file created at: $CRON_FILE"
         else
-            echo "[STARTUP] Warning: Could not start cron daemon (permission denied). Dependency updates will only run on startup."
+            echo "[STARTUP] Warning: Could not start cron daemon. Dependency updates will only run on startup."
         fi
     else
-        echo "[STARTUP] Warning: Could not set up crontab (permission denied). Dependency updates will only run on startup."
+        echo "[STARTUP] Error: Could not create cron file at $CRON_FILE"
     fi
 }
 
