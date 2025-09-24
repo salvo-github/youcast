@@ -44,11 +44,22 @@ FROM node:22-alpine AS production
 RUN apk add --no-cache \
     python3 \
     py3-pip \
-    ffmpeg \
     ca-certificates \
     curl \
     dumb-init \
+    xz \
     && rm -rf /var/cache/apk/*
+
+# Install latest FFmpeg static binary
+RUN ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') && \
+    curl -fsSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${ARCH}-static.tar.xz" \
+    -o /tmp/ffmpeg.tar.xz && \
+    mkdir -p /tmp/ffmpeg && \
+    tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg --strip-components=1 && \
+    cp /tmp/ffmpeg/ffmpeg /usr/local/bin/ && \
+    cp /tmp/ffmpeg/ffprobe /usr/local/bin/ && \
+    chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
+    rm -rf /tmp/ffmpeg*
 
 # Install Supercronic (rootless cron for Docker)
 RUN curl -fsSL https://github.com/aptible/supercronic/releases/download/v0.2.29/supercronic-linux-amd64 \
@@ -80,6 +91,66 @@ LOG_PREFIX="[UPDATE-DEPS]"
 # Function to log with timestamp
 log() {
     echo "$LOG_PREFIX $(date '+%Y-%m-%d %H:%M:%S') $1"
+}
+
+# Reusable function to install/update FFmpeg from static binary
+install_ffmpeg_latest() {
+    local install_dir="${1:-/usr/local/bin}"
+    local temp_dir="/tmp/ffmpeg-update-$$"
+    
+    log "Installing/updating FFmpeg to latest version..."
+    
+    # Detect architecture
+    ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+    log "Detected architecture: $ARCH"
+    
+    # Create temporary directory
+    mkdir -p "$temp_dir"
+    
+    # Download latest FFmpeg static binary
+    if curl -fsSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${ARCH}-static.tar.xz" \
+        -o "$temp_dir/ffmpeg.tar.xz" --connect-timeout 30 --max-time 300; then
+        
+        log "Downloaded FFmpeg static binary successfully"
+        
+        # Extract and install
+        if tar -xJf "$temp_dir/ffmpeg.tar.xz" -C "$temp_dir" --strip-components=1 2>/dev/null; then
+            # Check if we have write permissions to install directory
+            if [ -w "$install_dir" ] || [ "$(whoami)" = "root" ]; then
+                cp "$temp_dir/ffmpeg" "$install_dir/" && \
+                cp "$temp_dir/ffprobe" "$install_dir/" && \
+                chmod +x "$install_dir/ffmpeg" "$install_dir/ffprobe"
+                
+                # Verify installation
+                if command -v "$install_dir/ffmpeg" >/dev/null 2>&1; then
+                    NEW_VERSION=$("$install_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
+                    log "FFmpeg updated successfully to version: $NEW_VERSION"
+                    
+                    # Update PATH if not already included
+                    case ":$PATH:" in
+                        *":$install_dir:"*) ;;
+                        *) export PATH="$install_dir:$PATH" ;;
+                    esac
+                else
+                    log "ERROR: FFmpeg installation verification failed"
+                    return 1
+                fi
+            else
+                log "WARNING: No write permission to $install_dir, FFmpeg update skipped"
+                return 1
+            fi
+        else
+            log "ERROR: Failed to extract FFmpeg archive"
+            return 1
+        fi
+    else
+        log "ERROR: Failed to download FFmpeg static binary"
+        return 1
+    fi
+    
+    # Cleanup
+    rm -rf "$temp_dir"
+    return 0
 }
 
 # Create a unique session ID for this run
@@ -123,38 +194,177 @@ else
     log "Could not check for yt-dlp updates (network issue), using current version"
 fi
 
-# Check and update ffmpeg (rootless compatible approach)
-log "Checking ffmpeg version..."
+# Check and update FFmpeg using our reusable function
+log "Checking FFmpeg version..."
 CURRENT_FFMPEG=$(ffmpeg -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "not installed")
-log "Current ffmpeg: $CURRENT_FFMPEG"
+log "Current FFmpeg: $CURRENT_FFMPEG"
 
-# For rootless Docker, we can't use apk update/upgrade (requires root)
-# Instead, check if we can get latest static build info (but don't actually update)
-# This maintains the update check functionality without breaking in rootless environment
-
-# Try to get latest ffmpeg version info from johnvansickle static builds
+# Get the latest version info to compare
 LATEST_FFMPEG=""
 if command -v curl >/dev/null 2>&1; then
-    # Get version from johnvansickle's static builds (commonly used for Docker)
-    LATEST_FFMPEG=$(curl -s --connect-timeout 10 --max-time 15 "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz.md5" 2>/dev/null | head -n1 | grep -o 'ffmpeg-[0-9][^-]*' | sed 's/ffmpeg-//' || echo "")
-    
-    # If that fails, try a different approach or skip version check
-    if [ -z "$LATEST_FFMPEG" ]; then
-        log "Could not check for latest ffmpeg version (network/parsing issue)"
-        log "ffmpeg is available and functional ($CURRENT_FFMPEG)"
-    elif [ "$CURRENT_FFMPEG" != "$LATEST_FFMPEG" ]; then
-        log "ffmpeg could be updated from $CURRENT_FFMPEG to $LATEST_FFMPEG"
-        log "Note: Runtime ffmpeg updates require rebuilding the Docker image in rootless mode"
+    # Try to get version info from johnvansickle's static builds
+    ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+    LATEST_FFMPEG=$(curl -s --connect-timeout 10 --max-time 15 "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${ARCH}-static.tar.xz.md5" 2>/dev/null | head -n1 | grep -o 'ffmpeg-[0-9][^-]*' | sed 's/ffmpeg-//' || echo "")
+fi
+
+if [ -n "$LATEST_FFMPEG" ] && [ "$CURRENT_FFMPEG" != "$LATEST_FFMPEG" ]; then
+    log "FFmpeg update available: $CURRENT_FFMPEG -> $LATEST_FFMPEG"
+    if install_ffmpeg_latest; then
+        log "FFmpeg updated successfully"
     else
-        log "ffmpeg is up to date ($CURRENT_FFMPEG)"
+        log "FFmpeg update failed, continuing with current version"
     fi
+elif [ -n "$LATEST_FFMPEG" ]; then
+    log "FFmpeg is up to date ($CURRENT_FFMPEG)"
 else
-    log "ffmpeg is available and functional ($CURRENT_FFMPEG)"
+    log "Could not check for FFmpeg updates (network issue), using current version"
 fi
 
 log "Dependency check complete!"
 log "Session $SESSION_ID finished successfully"
 log "=========================================="
+EOF
+
+# Create standalone FFmpeg update script for manual usage
+RUN cat > /usr/local/bin/update-ffmpeg.sh << 'EOF'
+#!/bin/sh
+set -e
+
+LOG_PREFIX="[FFMPEG-UPDATE]"
+
+# Function to log with timestamp
+log() {
+    echo "$LOG_PREFIX $(date '+%Y-%m-%d %H:%M:%S') $1"
+}
+
+# Reusable function to install/update FFmpeg from static binary
+install_ffmpeg_latest() {
+    local install_dir="${1:-/usr/local/bin}"
+    local temp_dir="/tmp/ffmpeg-update-$$"
+    
+    log "Installing/updating FFmpeg to latest version..."
+    
+    # Detect architecture
+    ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+    log "Detected architecture: $ARCH"
+    
+    # Create temporary directory
+    mkdir -p "$temp_dir"
+    
+    # Download latest FFmpeg static binary
+    if curl -fsSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${ARCH}-static.tar.xz" \
+        -o "$temp_dir/ffmpeg.tar.xz" --connect-timeout 30 --max-time 300; then
+        
+        log "Downloaded FFmpeg static binary successfully"
+        
+        # Extract and install
+        if tar -xJf "$temp_dir/ffmpeg.tar.xz" -C "$temp_dir" --strip-components=1 2>/dev/null; then
+            # Check if we have write permissions to install directory
+            if [ -w "$install_dir" ] || [ "$(whoami)" = "root" ]; then
+                cp "$temp_dir/ffmpeg" "$install_dir/" && \
+                cp "$temp_dir/ffprobe" "$install_dir/" && \
+                chmod +x "$install_dir/ffmpeg" "$install_dir/ffprobe"
+                
+                # Verify installation
+                if command -v "$install_dir/ffmpeg" >/dev/null 2>&1; then
+                    NEW_VERSION=$("$install_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
+                    log "FFmpeg updated successfully to version: $NEW_VERSION"
+                    
+                    # Update PATH if not already included
+                    case ":$PATH:" in
+                        *":$install_dir:"*) ;;
+                        *) export PATH="$install_dir:$PATH" ;;
+                    esac
+                    
+                    log "FFmpeg binaries installed in: $install_dir"
+                    log "FFmpeg version: $NEW_VERSION"
+                    return 0
+                else
+                    log "ERROR: FFmpeg installation verification failed"
+                    return 1
+                fi
+            else
+                log "WARNING: No write permission to $install_dir, FFmpeg update skipped"
+                log "Try running with appropriate permissions or specify a writable directory:"
+                log "  $0 /path/to/writable/directory"
+                return 1
+            fi
+        else
+            log "ERROR: Failed to extract FFmpeg archive"
+            return 1
+        fi
+    else
+        log "ERROR: Failed to download FFmpeg static binary"
+        log "Please check your internet connection and try again"
+        return 1
+    fi
+    
+    # Cleanup
+    rm -rf "$temp_dir"
+}
+
+# Show usage information
+show_usage() {
+    echo "Usage: $0 [INSTALL_DIRECTORY]"
+    echo ""
+    echo "Download and install the latest FFmpeg static binary"
+    echo ""
+    echo "Arguments:"
+    echo "  INSTALL_DIRECTORY  Directory to install FFmpeg binaries (default: /usr/local/bin)"
+    echo ""
+    echo "Examples:"
+    echo "  $0                     # Install to /usr/local/bin (default)"
+    echo "  $0 /opt/ffmpeg/bin     # Install to custom directory"
+    echo "  $0 \$HOME/bin           # Install to user's bin directory"
+    echo ""
+    echo "Note: The script will automatically detect your system architecture"
+    echo "      and download the appropriate static binary from johnvansickle.com"
+}
+
+# Main script logic
+INSTALL_DIR="${1:-/usr/local/bin}"
+
+# Handle help flags
+case "$1" in
+    -h|--help|help)
+        show_usage
+        exit 0
+        ;;
+esac
+
+log "=========================================="
+log "FFmpeg Update Script"
+log "=========================================="
+
+# Check current FFmpeg version if available
+if command -v ffmpeg >/dev/null 2>&1; then
+    CURRENT_VERSION=$(ffmpeg -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
+    log "Current FFmpeg version: $CURRENT_VERSION"
+else
+    log "FFmpeg not found in PATH, proceeding with installation"
+fi
+
+log "Target installation directory: $INSTALL_DIR"
+
+# Perform the update
+if install_ffmpeg_latest "$INSTALL_DIR"; then
+    log "=========================================="
+    log "FFmpeg update completed successfully!"
+    log "=========================================="
+    
+    # Show final version
+    if command -v "$INSTALL_DIR/ffmpeg" >/dev/null 2>&1; then
+        FINAL_VERSION=$("$INSTALL_DIR/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
+        log "Final FFmpeg version: $FINAL_VERSION"
+    fi
+    
+    exit 0
+else
+    log "=========================================="
+    log "FFmpeg update failed!"
+    log "=========================================="
+    exit 1
+fi
 EOF
 
 # Create startup script that runs updates then starts the app
@@ -193,7 +403,7 @@ exec "$@"
 EOF
 
 # Make scripts executable and create directories
-RUN chmod +x /usr/local/bin/update-deps.sh /usr/local/bin/startup.sh && \
+RUN chmod +x /usr/local/bin/update-deps.sh /usr/local/bin/update-ffmpeg.sh /usr/local/bin/startup.sh && \
     mkdir -p /var/log /tmp/logs && \
     touch /tmp/logs/cron.log && \
     chmod 666 /tmp/logs/cron.log
