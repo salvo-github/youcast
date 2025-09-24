@@ -199,12 +199,36 @@ log "Checking FFmpeg version..."
 CURRENT_FFMPEG=$(ffmpeg -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "not installed")
 log "Current FFmpeg: $CURRENT_FFMPEG"
 
-# Get the latest version info to compare
-LATEST_FFMPEG=""
-if command -v curl >/dev/null 2>&1; then
-    # Try to get version info from johnvansickle's static builds
+# Check for FFmpeg updates by downloading and comparing versions
+check_ffmpeg_update() {
+    local temp_dir="/tmp/ffmpeg-version-check-$$"
+    local latest_version=""
+    
+    # Create temporary directory
+    mkdir -p "$temp_dir"
+    
+    # Download and extract to get the actual version
     ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-    LATEST_FFMPEG=$(curl -s --connect-timeout 10 --max-time 15 "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${ARCH}-static.tar.xz.md5" 2>/dev/null | head -n1 | grep -o 'ffmpeg-[0-9][^-]*' | sed 's/ffmpeg-//' || echo "")
+    if curl -fsSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${ARCH}-static.tar.xz" \
+        -o "$temp_dir/ffmpeg.tar.xz" --connect-timeout 10 --max-time 30 2>/dev/null; then
+        
+        if tar -xJf "$temp_dir/ffmpeg.tar.xz" -C "$temp_dir" --strip-components=1 2>/dev/null; then
+            if [ -x "$temp_dir/ffmpeg" ]; then
+                latest_version=$("$temp_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "")
+            fi
+        fi
+    fi
+    
+    # Cleanup
+    rm -rf "$temp_dir"
+    echo "$latest_version"
+}
+
+# Get latest version by downloading and checking the binary
+LATEST_FFMPEG=""
+if command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
+    log "Checking for latest FFmpeg version..."
+    LATEST_FFMPEG=$(check_ffmpeg_update)
 fi
 
 if [ -n "$LATEST_FFMPEG" ] && [ "$CURRENT_FFMPEG" != "$LATEST_FFMPEG" ]; then
@@ -217,7 +241,7 @@ if [ -n "$LATEST_FFMPEG" ] && [ "$CURRENT_FFMPEG" != "$LATEST_FFMPEG" ]; then
 elif [ -n "$LATEST_FFMPEG" ]; then
     log "FFmpeg is up to date ($CURRENT_FFMPEG)"
 else
-    log "Could not check for FFmpeg updates (network issue), using current version"
+    log "Could not check for FFmpeg updates, using current version"
 fi
 
 log "Dependency check complete!"
