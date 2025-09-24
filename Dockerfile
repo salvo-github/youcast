@@ -104,9 +104,9 @@ set -e
 
 LOG_PREFIX="[UPDATE-DEPS]"
 
-# Function to log with timestamp
+# Function to log (timestamp handled by Supercronic)
 log() {
-    echo "$LOG_PREFIX $(date '+%Y-%m-%d %H:%M:%S') $1"
+    echo "$LOG_PREFIX $1"
 }
 
 # Reusable function to install/update FFmpeg from static binary
@@ -272,9 +272,9 @@ set -e
 
 LOG_PREFIX="[FFMPEG-UPDATE]"
 
-# Function to log with timestamp
+# Function to log (timestamp handled by Supercronic)
 log() {
-    echo "$LOG_PREFIX $(date '+%Y-%m-%d %H:%M:%S') $1"
+    echo "$LOG_PREFIX $1"
 }
 
 # Reusable function to install/update FFmpeg from static binary
