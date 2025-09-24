@@ -135,18 +135,40 @@ set -e
 # Run dependency updates on startup
 /usr/local/bin/update-deps.sh
 
-# Set up hourly cron job for updates
-echo "0 * * * * /usr/local/bin/update-deps.sh >> /var/log/cron.log 2>&1" > /var/spool/cron/crontabs/root
+# Try to set up hourly cron job for updates (gracefully handle permission issues)
+setup_cron() {
+    # Ensure cron directories exist
+    mkdir -p /var/spool/cron/crontabs /var/log
+    
+    # Get current user (might not be root in docker-compose)
+    CURRENT_USER=$(whoami)
+    
+    # Try to set up cron job
+    if echo "0 * * * * /usr/local/bin/update-deps.sh >> /var/log/cron.log 2>&1" > /var/spool/cron/crontabs/$CURRENT_USER 2>/dev/null; then
+        echo "[STARTUP] Cron job set up successfully for user: $CURRENT_USER"
+        
+        # Start cron daemon in background
+        if crond -b -l 8 2>/dev/null; then
+            echo "[STARTUP] Cron daemon started successfully"
+        else
+            echo "[STARTUP] Warning: Could not start cron daemon, updates will only run at startup"
+        fi
+    else
+        echo "[STARTUP] Warning: Could not set up cron job (permission denied), updates will only run at startup"
+    fi
+}
 
-# Start cron daemon in background
-crond -b -l 8
+# Call setup function
+setup_cron
 
 # Execute the main application
 exec "$@"
 EOF
 
-# Make scripts executable
-RUN chmod +x /usr/local/bin/update-deps.sh /usr/local/bin/startup.sh
+# Make scripts executable and set up cron directories
+RUN chmod +x /usr/local/bin/update-deps.sh /usr/local/bin/startup.sh && \
+    mkdir -p /var/spool/cron/crontabs /var/log && \
+    chmod 755 /var/spool/cron/crontabs
 
 # NO USER directive - let docker-compose handle user management
 
