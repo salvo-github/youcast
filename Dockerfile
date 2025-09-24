@@ -77,7 +77,8 @@ RUN ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') && \
     rm -rf /tmp/ffmpeg*
 
 # Install Supercronic (rootless cron for Docker)
-RUN curl -fsSL https://github.com/aptible/supercronic/releases/download/v0.2.29/supercronic-linux-amd64 \
+RUN ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') && \
+    curl -fsSL "https://github.com/aptible/supercronic/releases/download/v0.2.29/supercronic-linux-${ARCH}" \
     -o /usr/local/bin/supercronic && \
     chmod +x /usr/local/bin/supercronic
 
