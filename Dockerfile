@@ -464,20 +464,37 @@ setup_cron() {
             # Check if this is job output (already formatted by update-deps.sh)
             if echo "$line" | grep -q 'channel=stdout'; then
                 # Extract and pass through the actual job output
-                echo "$line" | sed -n 's/.*channel=stdout msg="\(.*\)"/\1/p'
+                # Handle both quoted and unquoted msg values
+                job_output=$(echo "$line" | sed -n 's/.*msg="\([^"]*\)".*/\1/p')
+                if [ -z "$job_output" ]; then
+                    # Try without quotes if quoted extraction failed
+                    job_output=$(echo "$line" | sed -n 's/.*msg=\([^ ]*\).*/\1/p')
+                fi
+                if [ -n "$job_output" ]; then
+                    echo "$job_output"
+                fi
                 continue
             fi
             
             if echo "$line" | grep -q 'channel=stderr'; then
                 # Extract and pass through the stderr output
-                echo "$line" | sed -n 's/.*channel=stderr msg="\(.*\)"/\1/p'
+                stderr_output=$(echo "$line" | sed -n 's/.*msg="\([^"]*\)".*/\1/p')
+                if [ -z "$stderr_output" ]; then
+                    stderr_output=$(echo "$line" | sed -n 's/.*msg=\([^ ]*\).*/\1/p')
+                fi
+                if [ -n "$stderr_output" ]; then
+                    echo "$stderr_output"
+                fi
                 continue
             fi
             
             # Extract timestamp, level, and message from supercronic's structured logs
             timestamp=$(echo "$line" | sed -n 's/.*time="\([^"]*\)".*/\1/p')
             level=$(echo "$line" | sed -n 's/.*level=\([^ ]*\).*/\1/p' | tr '[:lower:]' '[:upper:]')
-            msg=$(echo "$line" | sed -n 's/.*msg="\?\([^"]*\)"\?.*/\1/p' | sed 's/msg=//;s/"$//')
+            msg=$(echo "$line" | sed -n 's/.*msg="\([^"]*\)".*/\1/p')
+            if [ -z "$msg" ]; then
+                msg=$(echo "$line" | sed -n 's/.*msg=\([^ ]*\).*/\1/p')
+            fi
             iteration=$(echo "$line" | sed -n 's/.*iteration=\([^ ]*\).*/\1/p')
             
             # Only format actual supercronic messages
