@@ -118,7 +118,7 @@ set -e
 log() {
     local level="${1:-INFO}"
     local message="$2"
-    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local timestamp=$(TZ=${TZ:-UTC} date +"%Y-%m-%dT%H:%M:%SZ")
     local level_padded=$(printf "%-5s" "$level")
     local component_padded=$(printf "%-15s" "UPDATE-DEPS")
     echo "${timestamp} [${level_padded}] ${component_padded} ${message}"
@@ -258,7 +258,7 @@ set -e
 log() {
     local level="${1:-INFO}"
     local message="$2"
-    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local timestamp=$(TZ=${TZ:-UTC} date +"%Y-%m-%dT%H:%M:%SZ")
     local level_padded=$(printf "%-5s" "$level")
     local component_padded=$(printf "%-15s" "FFMPEG-UPDATE")
     echo "${timestamp} [${level_padded}] ${component_padded} ${message}"
@@ -435,7 +435,7 @@ RUN cat > /usr/local/bin/startup.sh << 'EOF'
 log() {
     local level="${1:-INFO}"
     local message="$2"
-    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local timestamp=$(TZ=${TZ:-UTC} date +"%Y-%m-%dT%H:%M:%SZ")
     local level_padded=$(printf "%-5s" "$level")
     local component_padded=$(printf "%-15s" "STARTUP")
     echo "${timestamp} [${level_padded}] ${component_padded} ${message}"
