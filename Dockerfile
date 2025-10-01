@@ -68,7 +68,7 @@ RUN apk add --no-cache \
 # Install latest FFmpeg from John Van Sickle's static builds (widely trusted, updated regularly)
 # Use /app/bin for both build-time and runtime (consistent, writable in rootless containers)
 RUN ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') && \
-    mkdir -p /var/lib /app/bin && \
+    mkdir -p /app/bin && \
     REMOTE_VERSION=$(curl -fsSL "https://johnvansickle.com/ffmpeg/release-readme.txt" 2>/dev/null | grep -i "version:" | head -1 | awk '{print $2}' || echo "unknown") && \
     echo "Remote FFmpeg version: $REMOTE_VERSION" && \
     if [ "$REMOTE_VERSION" != "unknown" ]; then \
@@ -79,7 +79,7 @@ RUN ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') && \
         cp /tmp/ffmpeg/ffmpeg /app/bin/ && \
         cp /tmp/ffmpeg/ffprobe /app/bin/ && \
         chmod +x /app/bin/ffmpeg /app/bin/ffprobe && \
-        echo "$REMOTE_VERSION" > /var/lib/ffmpeg-version && \
+        echo "$REMOTE_VERSION" > /app/bin/.ffmpeg-version && \
         rm -rf /tmp/ffmpeg*; \
     else \
         echo "Failed to get remote version, skipping FFmpeg installation"; \
@@ -147,6 +147,8 @@ install_ffmpeg_latest() {
     LOCAL_VERSION=""
     if command -v "$install_dir/ffmpeg" >/dev/null 2>&1; then
         LOCAL_VERSION=$("$install_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "")
+        # Strip -static suffix for comparison (local reports "7.0.2-static", remote reports "7.0.2")
+        LOCAL_VERSION=$(echo "$LOCAL_VERSION" | sed 's/-static$//')
     fi
     
     # Compare versions - only download if different or not installed
@@ -175,8 +177,8 @@ install_ffmpeg_latest() {
                 NEW_VERSION=$("$install_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
                 log "INFO" "FFmpeg updated to $NEW_VERSION"
                 
-                # Save version to marker file
-                echo "$NEW_VERSION" > /var/lib/ffmpeg-version 2>/dev/null || true
+                # Save version to marker file (use writable location for rootless containers)
+                echo "$NEW_VERSION" > "$install_dir/.ffmpeg-version" 2>/dev/null || true
                 
                 # Update PATH to prioritize this installation (prepend if not already first)
                 case ":$PATH:" in
@@ -291,6 +293,8 @@ install_ffmpeg_latest() {
     LOCAL_VERSION=""
     if command -v "$install_dir/ffmpeg" >/dev/null 2>&1; then
         LOCAL_VERSION=$("$install_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "")
+        # Strip -static suffix for comparison (local reports "7.0.2-static", remote reports "7.0.2")
+        LOCAL_VERSION=$(echo "$LOCAL_VERSION" | sed 's/-static$//')
         log "INFO" "Local FFmpeg version: $LOCAL_VERSION"
     else
         log "INFO" "FFmpeg not installed locally"
@@ -324,8 +328,8 @@ install_ffmpeg_latest() {
                 NEW_VERSION=$("$install_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
                 log "INFO" "FFmpeg updated successfully to version: $NEW_VERSION"
                 
-                # Save version to marker file
-                echo "$NEW_VERSION" > /var/lib/ffmpeg-version 2>/dev/null || true
+                # Save version to marker file (use writable location for rootless containers)
+                echo "$NEW_VERSION" > "$install_dir/.ffmpeg-version" 2>/dev/null || true
                 
                 # Update PATH to prioritize this installation (prepend if not already first)
                 case ":$PATH:" in
