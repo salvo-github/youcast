@@ -65,18 +65,25 @@ RUN apk add --no-cache \
     xz \
     && rm -rf /var/cache/apk/*
 
-# Install latest FFmpeg from BtbN/FFmpeg-Builds (master branch, daily CI-tested builds)
-RUN ARCH=$(uname -m | sed 's/x86_64/linux64/;s/aarch64/linuxarm64/') && \
-    curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-${ARCH}-gpl.tar.xz" \
-    -o /tmp/ffmpeg.tar.xz && \
-    mkdir -p /tmp/ffmpeg /var/lib && \
-    tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg --strip-components=1 && \
-    cp /tmp/ffmpeg/bin/ffmpeg /usr/local/bin/ && \
-    cp /tmp/ffmpeg/bin/ffprobe /usr/local/bin/ && \
-    chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
-    curl -s --connect-timeout 5 --max-time 10 "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest" 2>/dev/null | \
-    grep -o '"name":[^,]*' | head -1 | cut -d'"' -f4 > /var/lib/ffmpeg-release-name && \
-    rm -rf /tmp/ffmpeg*
+# Install latest FFmpeg from John Van Sickle's static builds (widely trusted, updated regularly)
+RUN ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') && \
+    mkdir -p /var/lib && \
+    REMOTE_VERSION=$(curl -fsSL "https://johnvansickle.com/ffmpeg/release-readme.txt" 2>/dev/null | grep -i "version:" | head -1 | awk '{print $2}' || echo "unknown") && \
+    echo "Remote FFmpeg version: $REMOTE_VERSION" && \
+    if [ "$REMOTE_VERSION" != "unknown" ]; then \
+        curl -fsSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${ARCH}-static.tar.xz" \
+        -o /tmp/ffmpeg.tar.xz && \
+        mkdir -p /tmp/ffmpeg && \
+        tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg --strip-components=1 && \
+        cp /tmp/ffmpeg/ffmpeg /usr/local/bin/ && \
+        cp /tmp/ffmpeg/ffprobe /usr/local/bin/ && \
+        chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
+        echo "$REMOTE_VERSION" > /var/lib/ffmpeg-version && \
+        rm -rf /tmp/ffmpeg*; \
+    else \
+        echo "Failed to get remote version, skipping FFmpeg installation"; \
+        exit 1; \
+    fi
 
 # Install Supercronic (rootless cron for Docker)
 RUN ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') && \
@@ -114,33 +121,58 @@ log() {
     echo "${timestamp} [${level_padded}] ${component_padded} ${message}"
 }
 
-# Reusable function to install/update FFmpeg from BtbN/FFmpeg-Builds
+# Reusable function to install/update FFmpeg from John Van Sickle's static builds
 install_ffmpeg_latest() {
     local install_dir="${1:-/usr/local/bin}"
     local temp_dir="/tmp/ffmpeg-update-$$"
     
-    # Detect architecture for BtbN builds (linux64 or linuxarm64)
-    ARCH=$(uname -m | sed 's/x86_64/linux64/;s/aarch64/linuxarm64/')
+    # Detect architecture for John Van Sickle builds (amd64 or arm64)
+    ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+    
+    # Get remote version from release readme
+    REMOTE_VERSION=$(curl -fsSL "https://johnvansickle.com/ffmpeg/release-readme.txt" 2>/dev/null | grep -i "version:" | head -1 | awk '{print $2}' || echo "")
+    
+    if [ -z "$REMOTE_VERSION" ]; then
+        log "ERROR" "Failed to get remote FFmpeg version"
+        return 1
+    fi
+    
+    # Get local version if FFmpeg is installed
+    LOCAL_VERSION=""
+    if command -v "$install_dir/ffmpeg" >/dev/null 2>&1; then
+        LOCAL_VERSION=$("$install_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "")
+    fi
+    
+    # Compare versions - only download if different or not installed
+    if [ -n "$LOCAL_VERSION" ] && [ "$LOCAL_VERSION" = "$REMOTE_VERSION" ]; then
+        log "INFO" "FFmpeg already at latest version ($LOCAL_VERSION)"
+        return 0
+    fi
+    
+    log "INFO" "Updating FFmpeg: ${LOCAL_VERSION:-not installed} → $REMOTE_VERSION"
     
     # Create temporary directory
     mkdir -p "$temp_dir"
     
-    # Download latest FFmpeg from BtbN/FFmpeg-Builds (master, daily CI-tested)
-    if curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-${ARCH}-gpl.tar.xz" \
+    # Download latest FFmpeg from John Van Sickle's builds
+    if curl -fsSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${ARCH}-static.tar.xz" \
         -o "$temp_dir/ffmpeg.tar.xz" --connect-timeout 30 --max-time 300 2>/dev/null; then
         
-        # Extract and install (BtbN builds have binaries in bin/ subdirectory)
+        # Extract and install
         if tar -xJf "$temp_dir/ffmpeg.tar.xz" -C "$temp_dir" --strip-components=1 2>/dev/null; then
             # Check if we have write permissions to install directory
             if [ -w "$install_dir" ] || [ "$(whoami)" = "root" ]; then
-                cp "$temp_dir/bin/ffmpeg" "$install_dir/" && \
-                cp "$temp_dir/bin/ffprobe" "$install_dir/" && \
+                cp "$temp_dir/ffmpeg" "$install_dir/" && \
+                cp "$temp_dir/ffprobe" "$install_dir/" && \
                 chmod +x "$install_dir/ffmpeg" "$install_dir/ffprobe"
                 
                 # Verify installation
                 if command -v "$install_dir/ffmpeg" >/dev/null 2>&1; then
                     NEW_VERSION=$("$install_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
                     log "INFO" "FFmpeg updated to $NEW_VERSION"
+                    
+                    # Save version to marker file
+                    echo "$NEW_VERSION" > /var/lib/ffmpeg-version 2>/dev/null || true
                     
                     # Update PATH if not already included
                     case ":$PATH:" in
@@ -149,18 +181,22 @@ install_ffmpeg_latest() {
                     esac
                 else
                     log "ERROR" "FFmpeg installation verification failed"
+                    rm -rf "$temp_dir"
                     return 1
                 fi
             else
                 log "WARN" "No write permission to $install_dir"
+                rm -rf "$temp_dir"
                 return 1
             fi
         else
             log "ERROR" "Failed to extract FFmpeg archive"
+            rm -rf "$temp_dir"
             return 1
         fi
     else
         log "ERROR" "Failed to download FFmpeg"
+        rm -rf "$temp_dir"
         return 1
     fi
     
@@ -198,46 +234,8 @@ else
     log "WARN" "Could not check yt-dlp updates"
 fi
 
-# Check and update FFmpeg using GitHub API (fast, no large downloads)
-CURRENT_FFMPEG=$(ffmpeg -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "not installed")
-
-# Marker file to track installed release name (e.g., "Latest Auto-Build (2025-10-01 13:33)")
-FFMPEG_RELEASE_MARKER="/var/lib/ffmpeg-release-name"
-
-# Get current installed release name
-CURRENT_RELEASE_NAME=""
-if [ -f "$FFMPEG_RELEASE_MARKER" ]; then
-    CURRENT_RELEASE_NAME=$(cat "$FFMPEG_RELEASE_MARKER" 2>/dev/null || echo "")
-fi
-
-# Check latest release using GitHub API (lightweight, ~1KB response)
-LATEST_RELEASE_NAME=""
-if command -v curl >/dev/null 2>&1; then
-    # Get latest release name from GitHub API (contains actual build date/time)
-    LATEST_RELEASE_NAME=$(curl -s --connect-timeout 5 --max-time 10 \
-        "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest" 2>/dev/null | \
-        grep -o '"name":[^,]*' | head -1 | cut -d'"' -f4)
-fi
-
-# Compare release names and update if different
-if [ -n "$LATEST_RELEASE_NAME" ]; then
-    if [ -z "$CURRENT_RELEASE_NAME" ]; then
-        log "INFO" "Installing FFmpeg..."
-        # First time or marker missing - install
-        if install_ffmpeg_latest; then
-            echo "$LATEST_RELEASE_NAME" > "$FFMPEG_RELEASE_MARKER"
-        fi
-    elif [ "$CURRENT_RELEASE_NAME" != "$LATEST_RELEASE_NAME" ]; then
-        log "INFO" "FFmpeg update available: $LATEST_RELEASE_NAME"
-        if install_ffmpeg_latest; then
-            echo "$LATEST_RELEASE_NAME" > "$FFMPEG_RELEASE_MARKER"
-        fi
-    else
-        log "INFO" "FFmpeg up to date ($CURRENT_FFMPEG)"
-    fi
-else
-    log "WARN" "Could not check FFmpeg updates"
-fi
+# Check and update FFmpeg (version check handled inside install_ffmpeg_latest)
+install_ffmpeg_latest
 
 log "INFO" "Dependency check complete"
 EOF
@@ -257,38 +255,68 @@ log() {
     echo "${timestamp} [${level_padded}] ${component_padded} ${message}"
 }
 
-# Reusable function to install/update FFmpeg from BtbN/FFmpeg-Builds
+# Reusable function to install/update FFmpeg from John Van Sickle's static builds
 install_ffmpeg_latest() {
     local install_dir="${1:-/usr/local/bin}"
     local temp_dir="/tmp/ffmpeg-update-$$"
     
-    log "INFO" "Installing/updating FFmpeg to latest version..."
+    log "INFO" "Checking FFmpeg version..."
     
-    # Detect architecture for BtbN builds (linux64 or linuxarm64)
-    ARCH=$(uname -m | sed 's/x86_64/linux64/;s/aarch64/linuxarm64/')
+    # Detect architecture for John Van Sickle builds (amd64 or arm64)
+    ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
     log "INFO" "Detected architecture: $ARCH"
+    
+    # Get remote version from release readme
+    REMOTE_VERSION=$(curl -fsSL "https://johnvansickle.com/ffmpeg/release-readme.txt" 2>/dev/null | grep -i "version:" | head -1 | awk '{print $2}' || echo "")
+    
+    if [ -z "$REMOTE_VERSION" ]; then
+        log "ERROR" "Failed to get remote FFmpeg version"
+        return 1
+    fi
+    
+    log "INFO" "Remote FFmpeg version: $REMOTE_VERSION"
+    
+    # Get local version if FFmpeg is installed
+    LOCAL_VERSION=""
+    if command -v "$install_dir/ffmpeg" >/dev/null 2>&1; then
+        LOCAL_VERSION=$("$install_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "")
+        log "INFO" "Local FFmpeg version: $LOCAL_VERSION"
+    else
+        log "INFO" "FFmpeg not installed locally"
+    fi
+    
+    # Compare versions - only download if different or not installed
+    if [ -n "$LOCAL_VERSION" ] && [ "$LOCAL_VERSION" = "$REMOTE_VERSION" ]; then
+        log "INFO" "FFmpeg already at latest version ($LOCAL_VERSION), skipping download"
+        return 0
+    fi
+    
+    log "INFO" "Installing/updating FFmpeg: ${LOCAL_VERSION:-not installed} → $REMOTE_VERSION"
     
     # Create temporary directory
     mkdir -p "$temp_dir"
     
-    # Download latest FFmpeg from BtbN/FFmpeg-Builds (master, daily CI-tested)
-    if curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-${ARCH}-gpl.tar.xz" \
+    # Download latest FFmpeg from John Van Sickle's builds
+    if curl -fsSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${ARCH}-static.tar.xz" \
         -o "$temp_dir/ffmpeg.tar.xz" --connect-timeout 30 --max-time 300; then
         
         log "INFO" "Downloaded FFmpeg static binary successfully"
         
-        # Extract and install (BtbN builds have binaries in bin/ subdirectory)
+        # Extract and install
         if tar -xJf "$temp_dir/ffmpeg.tar.xz" -C "$temp_dir" --strip-components=1 2>/dev/null; then
             # Check if we have write permissions to install directory
             if [ -w "$install_dir" ] || [ "$(whoami)" = "root" ]; then
-                cp "$temp_dir/bin/ffmpeg" "$install_dir/" && \
-                cp "$temp_dir/bin/ffprobe" "$install_dir/" && \
+                cp "$temp_dir/ffmpeg" "$install_dir/" && \
+                cp "$temp_dir/ffprobe" "$install_dir/" && \
                 chmod +x "$install_dir/ffmpeg" "$install_dir/ffprobe"
                 
                 # Verify installation
                 if command -v "$install_dir/ffmpeg" >/dev/null 2>&1; then
                     NEW_VERSION=$("$install_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
                     log "INFO" "FFmpeg updated successfully to version: $NEW_VERSION"
+                    
+                    # Save version to marker file
+                    echo "$NEW_VERSION" > /var/lib/ffmpeg-version 2>/dev/null || true
                     
                     # Update PATH if not already included
                     case ":$PATH:" in
@@ -301,21 +329,25 @@ install_ffmpeg_latest() {
                     return 0
                 else
                     log "ERROR" "FFmpeg installation verification failed"
+                    rm -rf "$temp_dir"
                     return 1
                 fi
             else
                 log "WARN" "No write permission to $install_dir, FFmpeg update skipped"
                 log "WARN" "Try running with appropriate permissions or specify a writable directory:"
                 log "WARN" "  $0 /path/to/writable/directory"
+                rm -rf "$temp_dir"
                 return 1
             fi
         else
             log "ERROR" "Failed to extract FFmpeg archive"
+            rm -rf "$temp_dir"
             return 1
         fi
     else
-        log "ERROR" "Failed to download FFmpeg static binary from BtbN/FFmpeg-Builds"
+        log "ERROR" "Failed to download FFmpeg static binary from John Van Sickle's builds"
         log "ERROR" "Please check your internet connection and try again"
+        rm -rf "$temp_dir"
         return 1
     fi
     
