@@ -449,17 +449,30 @@ setup_cron() {
     CURRENT_USER=$(whoami)
     log "INFO" "Setting up cron scheduler for user: $CURRENT_USER"
     
+    # Get cron schedule from environment variable, default to hourly
+    CRON_SCHEDULE="${CRON:-0 * * * *}"
+    log "INFO" "Cron schedule: ${CRON_SCHEDULE}"
+    
     # Create cron file at runtime
     CRON_FILE="/tmp/youcast-cron"
-    echo "0 * * * * CRON_TRIGGER=hourly /usr/local/bin/update-deps.sh" > "$CRON_FILE"
+    echo "${CRON_SCHEDULE} /usr/local/bin/update-deps.sh" > "$CRON_FILE"
     
     # Start Supercronic in background (rootless cron scheduler)
     if command -v supercronic >/dev/null 2>&1; then
         # Pipe supercronic through log formatter to match YouCast format
         supercronic "$CRON_FILE" 2>&1 | while IFS= read -r line; do
-            # Skip job output (already formatted by update-deps.sh)
-            echo "$line" | grep -q 'channel=stdout' && continue
-            echo "$line" | grep -q 'channel=stderr' && continue
+            # Check if this is job output (already formatted by update-deps.sh)
+            if echo "$line" | grep -q 'channel=stdout'; then
+                # Extract and pass through the actual job output
+                echo "$line" | sed -n 's/.*channel=stdout msg="\(.*\)"/\1/p'
+                continue
+            fi
+            
+            if echo "$line" | grep -q 'channel=stderr'; then
+                # Extract and pass through the stderr output
+                echo "$line" | sed -n 's/.*channel=stderr msg="\(.*\)"/\1/p'
+                continue
+            fi
             
             # Extract timestamp, level, and message from supercronic's structured logs
             timestamp=$(echo "$line" | sed -n 's/.*time="\([^"]*\)".*/\1/p')
@@ -480,7 +493,7 @@ setup_cron() {
                 fi
             fi
         done &
-        log "INFO" "Supercronic started successfully - hourly dependency updates enabled"
+        log "INFO" "Supercronic started successfully - dependency updates scheduled"
     else
         log "WARN" "Supercronic not found - dependency updates will only run on startup"
     fi
