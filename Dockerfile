@@ -407,9 +407,33 @@ setup_cron() {
     CRON_FILE="/tmp/youcast-cron"
     echo "0 * * * * CRON_TRIGGER=hourly /usr/local/bin/update-deps.sh" > "$CRON_FILE"
     
-    # Start Supercronic in background (rootless cron scheduler) - suppress its logs
+    # Start Supercronic in background (rootless cron scheduler)
     if command -v supercronic >/dev/null 2>&1; then
-        supercronic "$CRON_FILE" >/dev/null 2>&1 &
+        # Pipe supercronic through log formatter to match YouCast format
+        supercronic "$CRON_FILE" 2>&1 | while IFS= read -r line; do
+            # Skip job output (already formatted by update-deps.sh)
+            echo "$line" | grep -q 'channel=stdout' && continue
+            echo "$line" | grep -q 'channel=stderr' && continue
+            
+            # Extract timestamp, level, and message from supercronic's structured logs
+            timestamp=$(echo "$line" | sed -n 's/.*time="\([^"]*\)".*/\1/p')
+            level=$(echo "$line" | sed -n 's/.*level=\([^ ]*\).*/\1/p' | tr '[:lower:]' '[:upper:]')
+            msg=$(echo "$line" | sed -n 's/.*msg="\?\([^"]*\)"\?.*/\1/p' | sed 's/msg=//;s/"$//')
+            iteration=$(echo "$line" | sed -n 's/.*iteration=\([^ ]*\).*/\1/p')
+            
+            # Only format actual supercronic messages
+            if [ -n "$timestamp" ] && [ -n "$level" ]; then
+                level_padded=$(printf "%-5s" "$level")
+                component_padded=$(printf "%-15s" "SUPERCRONIC")
+                
+                # Add iteration info if present
+                if [ -n "$iteration" ]; then
+                    echo "${timestamp} [${level_padded}] ${component_padded} ${msg} (iteration ${iteration})"
+                else
+                    echo "${timestamp} [${level_padded}] ${component_padded} ${msg}"
+                fi
+            fi
+        done &
         log "INFO" "Supercronic started successfully - hourly dependency updates enabled"
     else
         log "WARN" "Supercronic not found - dependency updates will only run on startup"
