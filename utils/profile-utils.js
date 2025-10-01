@@ -5,6 +5,7 @@
 import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import logger from './logger.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -14,9 +15,9 @@ let profilesConfig;
 try {
   const configPath = resolve(__dirname, '../config/yt-dlp-profiles.json');
   profilesConfig = JSON.parse(readFileSync(configPath, 'utf8'));
-  console.info(`Loaded ${Object.keys(profilesConfig).length} yt-dlp profiles`);
+  logger.info('Config', `Loaded ${Object.keys(profilesConfig).length} yt-dlp profiles`);
 } catch (error) {
-  console.error('Failed to load yt-dlp profiles configuration:', error.message);
+  logger.error('Config', 'Failed to load yt-dlp profiles configuration', error);
   process.exit(1); // Cannot continue without profile config
 }
 

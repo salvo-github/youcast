@@ -65,15 +65,17 @@ RUN apk add --no-cache \
     xz \
     && rm -rf /var/cache/apk/*
 
-# Install latest FFmpeg static binary
-RUN ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') && \
-    curl -fsSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${ARCH}-static.tar.xz" \
+# Install latest FFmpeg from BtbN/FFmpeg-Builds (master branch, daily CI-tested builds)
+RUN ARCH=$(uname -m | sed 's/x86_64/linux64/;s/aarch64/linuxarm64/') && \
+    curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-${ARCH}-gpl.tar.xz" \
     -o /tmp/ffmpeg.tar.xz && \
-    mkdir -p /tmp/ffmpeg && \
+    mkdir -p /tmp/ffmpeg /var/lib && \
     tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg --strip-components=1 && \
-    cp /tmp/ffmpeg/ffmpeg /usr/local/bin/ && \
-    cp /tmp/ffmpeg/ffprobe /usr/local/bin/ && \
+    cp /tmp/ffmpeg/bin/ffmpeg /usr/local/bin/ && \
+    cp /tmp/ffmpeg/bin/ffprobe /usr/local/bin/ && \
     chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
+    curl -s --connect-timeout 5 --max-time 10 "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest" 2>/dev/null | \
+    grep -o '"name":[^,]*' | head -1 | cut -d'"' -f4 > /var/lib/ffmpeg-release-name && \
     rm -rf /tmp/ffmpeg*
 
 # Install Supercronic (rootless cron for Docker)
@@ -102,45 +104,43 @@ RUN cat > /usr/local/bin/update-deps.sh << 'EOF'
 #!/bin/sh
 set -e
 
-LOG_PREFIX="[UPDATE-DEPS]"
-
-# Function to log (timestamp handled by Supercronic)
+# Function to log with timestamp and level (matching YouCast logger format)
 log() {
-    echo "$LOG_PREFIX $1"
+    local level="${1:-INFO}"
+    local message="$2"
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local level_padded=$(printf "%-5s" "$level")
+    local component_padded=$(printf "%-15s" "UPDATE-DEPS")
+    echo "${timestamp} [${level_padded}] ${component_padded} ${message}"
 }
 
-# Reusable function to install/update FFmpeg from static binary
+# Reusable function to install/update FFmpeg from BtbN/FFmpeg-Builds
 install_ffmpeg_latest() {
     local install_dir="${1:-/usr/local/bin}"
     local temp_dir="/tmp/ffmpeg-update-$$"
     
-    log "Installing/updating FFmpeg to latest version..."
-    
-    # Detect architecture
-    ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-    log "Detected architecture: $ARCH"
+    # Detect architecture for BtbN builds (linux64 or linuxarm64)
+    ARCH=$(uname -m | sed 's/x86_64/linux64/;s/aarch64/linuxarm64/')
     
     # Create temporary directory
     mkdir -p "$temp_dir"
     
-    # Download latest FFmpeg static binary
-    if curl -fsSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${ARCH}-static.tar.xz" \
-        -o "$temp_dir/ffmpeg.tar.xz" --connect-timeout 30 --max-time 300; then
+    # Download latest FFmpeg from BtbN/FFmpeg-Builds (master, daily CI-tested)
+    if curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-${ARCH}-gpl.tar.xz" \
+        -o "$temp_dir/ffmpeg.tar.xz" --connect-timeout 30 --max-time 300 2>/dev/null; then
         
-        log "Downloaded FFmpeg static binary successfully"
-        
-        # Extract and install
+        # Extract and install (BtbN builds have binaries in bin/ subdirectory)
         if tar -xJf "$temp_dir/ffmpeg.tar.xz" -C "$temp_dir" --strip-components=1 2>/dev/null; then
             # Check if we have write permissions to install directory
             if [ -w "$install_dir" ] || [ "$(whoami)" = "root" ]; then
-                cp "$temp_dir/ffmpeg" "$install_dir/" && \
-                cp "$temp_dir/ffprobe" "$install_dir/" && \
+                cp "$temp_dir/bin/ffmpeg" "$install_dir/" && \
+                cp "$temp_dir/bin/ffprobe" "$install_dir/" && \
                 chmod +x "$install_dir/ffmpeg" "$install_dir/ffprobe"
                 
                 # Verify installation
                 if command -v "$install_dir/ffmpeg" >/dev/null 2>&1; then
                     NEW_VERSION=$("$install_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
-                    log "FFmpeg updated successfully to version: $NEW_VERSION"
+                    log "INFO" "FFmpeg updated to $NEW_VERSION"
                     
                     # Update PATH if not already included
                     case ":$PATH:" in
@@ -148,19 +148,19 @@ install_ffmpeg_latest() {
                         *) export PATH="$install_dir:$PATH" ;;
                     esac
                 else
-                    log "ERROR: FFmpeg installation verification failed"
+                    log "ERROR" "FFmpeg installation verification failed"
                     return 1
                 fi
             else
-                log "WARNING: No write permission to $install_dir, FFmpeg update skipped"
+                log "WARN" "No write permission to $install_dir"
                 return 1
             fi
         else
-            log "ERROR: Failed to extract FFmpeg archive"
+            log "ERROR" "Failed to extract FFmpeg archive"
             return 1
         fi
     else
-        log "ERROR: Failed to download FFmpeg static binary"
+        log "ERROR" "Failed to download FFmpeg"
         return 1
     fi
     
@@ -169,22 +169,10 @@ install_ffmpeg_latest() {
     return 0
 }
 
-# Create a unique session ID for this run
-SESSION_ID="$(date '+%Y%m%d-%H%M%S')-$$"
-
-log "=========================================="
-log "Starting dependency update session: $SESSION_ID"
-log "Triggered by: ${CRON_TRIGGER:-startup}"
-log "User: $(whoami)"
-log "Working directory: $(pwd)"
-log "=========================================="
-
-log "Checking for dependency updates..."
+log "INFO" "Checking for dependency updates..."
 
 # Check and update yt-dlp
-log "Checking yt-dlp version..."
 CURRENT_YT_DLP=$(yt-dlp --version 2>/dev/null || echo "not installed")
-log "Current yt-dlp: $CURRENT_YT_DLP"
 
 # Get latest yt-dlp version from GitHub API with timeout
 LATEST_YT_DLP=""
@@ -198,71 +186,60 @@ if command -v curl >/dev/null 2>&1; then
 fi
 
 if [ -n "$LATEST_YT_DLP" ] && [ "$CURRENT_YT_DLP" != "$LATEST_YT_DLP" ]; then
-    log "Updating yt-dlp from $CURRENT_YT_DLP to $LATEST_YT_DLP..."
+    log "INFO" "Updating yt-dlp: $CURRENT_YT_DLP → $LATEST_YT_DLP"
     if python3 -m pip install --no-cache-dir --break-system-packages --upgrade --force-reinstall yt-dlp >/dev/null 2>&1; then
-        log "yt-dlp updated successfully to $(yt-dlp --version)"
+        log "INFO" "yt-dlp updated to $(yt-dlp --version)"
     else
-        log "Failed to update yt-dlp, continuing with current version"
+        log "ERROR" "Failed to update yt-dlp"
     fi
 elif [ -n "$LATEST_YT_DLP" ]; then
-    log "yt-dlp is up to date ($CURRENT_YT_DLP)"
+    log "INFO" "yt-dlp up to date ($CURRENT_YT_DLP)"
 else
-    log "Could not check for yt-dlp updates (network issue), using current version"
+    log "WARN" "Could not check yt-dlp updates"
 fi
 
-# Check and update FFmpeg using our reusable function
-log "Checking FFmpeg version..."
+# Check and update FFmpeg using GitHub API (fast, no large downloads)
 CURRENT_FFMPEG=$(ffmpeg -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "not installed")
-log "Current FFmpeg: $CURRENT_FFMPEG"
 
-# Check for FFmpeg updates by downloading and comparing versions
-check_ffmpeg_update() {
-    local temp_dir="/tmp/ffmpeg-version-check-$$"
-    local latest_version=""
-    
-    # Create temporary directory
-    mkdir -p "$temp_dir"
-    
-    # Download and extract to get the actual version
-    ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-    if curl -fsSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${ARCH}-static.tar.xz" \
-        -o "$temp_dir/ffmpeg.tar.xz" --connect-timeout 10 --max-time 30 2>/dev/null; then
-        
-        if tar -xJf "$temp_dir/ffmpeg.tar.xz" -C "$temp_dir" --strip-components=1 2>/dev/null; then
-            if [ -x "$temp_dir/ffmpeg" ]; then
-                latest_version=$("$temp_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "")
-            fi
+# Marker file to track installed release name (e.g., "Latest Auto-Build (2025-10-01 13:33)")
+FFMPEG_RELEASE_MARKER="/var/lib/ffmpeg-release-name"
+
+# Get current installed release name
+CURRENT_RELEASE_NAME=""
+if [ -f "$FFMPEG_RELEASE_MARKER" ]; then
+    CURRENT_RELEASE_NAME=$(cat "$FFMPEG_RELEASE_MARKER" 2>/dev/null || echo "")
+fi
+
+# Check latest release using GitHub API (lightweight, ~1KB response)
+LATEST_RELEASE_NAME=""
+if command -v curl >/dev/null 2>&1; then
+    # Get latest release name from GitHub API (contains actual build date/time)
+    LATEST_RELEASE_NAME=$(curl -s --connect-timeout 5 --max-time 10 \
+        "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest" 2>/dev/null | \
+        grep -o '"name":[^,]*' | head -1 | cut -d'"' -f4)
+fi
+
+# Compare release names and update if different
+if [ -n "$LATEST_RELEASE_NAME" ]; then
+    if [ -z "$CURRENT_RELEASE_NAME" ]; then
+        log "INFO" "Installing FFmpeg..."
+        # First time or marker missing - install
+        if install_ffmpeg_latest; then
+            echo "$LATEST_RELEASE_NAME" > "$FFMPEG_RELEASE_MARKER"
         fi
-    fi
-    
-    # Cleanup
-    rm -rf "$temp_dir"
-    echo "$latest_version"
-}
-
-# Get latest version by downloading and checking the binary
-LATEST_FFMPEG=""
-if command -v curl >/dev/null 2>&1 && command -v tar >/dev/null 2>&1; then
-    log "Checking for latest FFmpeg version..."
-    LATEST_FFMPEG=$(check_ffmpeg_update)
-fi
-
-if [ -n "$LATEST_FFMPEG" ] && [ "$CURRENT_FFMPEG" != "$LATEST_FFMPEG" ]; then
-    log "FFmpeg update available: $CURRENT_FFMPEG -> $LATEST_FFMPEG"
-    if install_ffmpeg_latest; then
-        log "FFmpeg updated successfully"
+    elif [ "$CURRENT_RELEASE_NAME" != "$LATEST_RELEASE_NAME" ]; then
+        log "INFO" "FFmpeg update available: $LATEST_RELEASE_NAME"
+        if install_ffmpeg_latest; then
+            echo "$LATEST_RELEASE_NAME" > "$FFMPEG_RELEASE_MARKER"
+        fi
     else
-        log "FFmpeg update failed, continuing with current version"
+        log "INFO" "FFmpeg up to date ($CURRENT_FFMPEG)"
     fi
-elif [ -n "$LATEST_FFMPEG" ]; then
-    log "FFmpeg is up to date ($CURRENT_FFMPEG)"
 else
-    log "Could not check for FFmpeg updates, using current version"
+    log "WARN" "Could not check FFmpeg updates"
 fi
 
-log "Dependency check complete!"
-log "Session $SESSION_ID finished successfully"
-log "=========================================="
+log "INFO" "Dependency check complete"
 EOF
 
 # Create standalone FFmpeg update script for manual usage
@@ -270,45 +247,48 @@ RUN cat > /usr/local/bin/update-ffmpeg.sh << 'EOF'
 #!/bin/sh
 set -e
 
-LOG_PREFIX="[FFMPEG-UPDATE]"
-
-# Function to log (timestamp handled by Supercronic)
+# Function to log with timestamp and level (matching YouCast logger format)
 log() {
-    echo "$LOG_PREFIX $1"
+    local level="${1:-INFO}"
+    local message="$2"
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local level_padded=$(printf "%-5s" "$level")
+    local component_padded=$(printf "%-15s" "FFMPEG-UPDATE")
+    echo "${timestamp} [${level_padded}] ${component_padded} ${message}"
 }
 
-# Reusable function to install/update FFmpeg from static binary
+# Reusable function to install/update FFmpeg from BtbN/FFmpeg-Builds
 install_ffmpeg_latest() {
     local install_dir="${1:-/usr/local/bin}"
     local temp_dir="/tmp/ffmpeg-update-$$"
     
-    log "Installing/updating FFmpeg to latest version..."
+    log "INFO" "Installing/updating FFmpeg to latest version..."
     
-    # Detect architecture
-    ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-    log "Detected architecture: $ARCH"
+    # Detect architecture for BtbN builds (linux64 or linuxarm64)
+    ARCH=$(uname -m | sed 's/x86_64/linux64/;s/aarch64/linuxarm64/')
+    log "INFO" "Detected architecture: $ARCH"
     
     # Create temporary directory
     mkdir -p "$temp_dir"
     
-    # Download latest FFmpeg static binary
-    if curl -fsSL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${ARCH}-static.tar.xz" \
+    # Download latest FFmpeg from BtbN/FFmpeg-Builds (master, daily CI-tested)
+    if curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-${ARCH}-gpl.tar.xz" \
         -o "$temp_dir/ffmpeg.tar.xz" --connect-timeout 30 --max-time 300; then
         
-        log "Downloaded FFmpeg static binary successfully"
+        log "INFO" "Downloaded FFmpeg static binary successfully"
         
-        # Extract and install
+        # Extract and install (BtbN builds have binaries in bin/ subdirectory)
         if tar -xJf "$temp_dir/ffmpeg.tar.xz" -C "$temp_dir" --strip-components=1 2>/dev/null; then
             # Check if we have write permissions to install directory
             if [ -w "$install_dir" ] || [ "$(whoami)" = "root" ]; then
-                cp "$temp_dir/ffmpeg" "$install_dir/" && \
-                cp "$temp_dir/ffprobe" "$install_dir/" && \
+                cp "$temp_dir/bin/ffmpeg" "$install_dir/" && \
+                cp "$temp_dir/bin/ffprobe" "$install_dir/" && \
                 chmod +x "$install_dir/ffmpeg" "$install_dir/ffprobe"
                 
                 # Verify installation
                 if command -v "$install_dir/ffmpeg" >/dev/null 2>&1; then
                     NEW_VERSION=$("$install_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
-                    log "FFmpeg updated successfully to version: $NEW_VERSION"
+                    log "INFO" "FFmpeg updated successfully to version: $NEW_VERSION"
                     
                     # Update PATH if not already included
                     case ":$PATH:" in
@@ -316,26 +296,26 @@ install_ffmpeg_latest() {
                         *) export PATH="$install_dir:$PATH" ;;
                     esac
                     
-                    log "FFmpeg binaries installed in: $install_dir"
-                    log "FFmpeg version: $NEW_VERSION"
+                    log "INFO" "FFmpeg binaries installed in: $install_dir"
+                    log "INFO" "FFmpeg version: $NEW_VERSION"
                     return 0
                 else
-                    log "ERROR: FFmpeg installation verification failed"
+                    log "ERROR" "FFmpeg installation verification failed"
                     return 1
                 fi
             else
-                log "WARNING: No write permission to $install_dir, FFmpeg update skipped"
-                log "Try running with appropriate permissions or specify a writable directory:"
-                log "  $0 /path/to/writable/directory"
+                log "WARN" "No write permission to $install_dir, FFmpeg update skipped"
+                log "WARN" "Try running with appropriate permissions or specify a writable directory:"
+                log "WARN" "  $0 /path/to/writable/directory"
                 return 1
             fi
         else
-            log "ERROR: Failed to extract FFmpeg archive"
+            log "ERROR" "Failed to extract FFmpeg archive"
             return 1
         fi
     else
-        log "ERROR: Failed to download FFmpeg static binary"
-        log "Please check your internet connection and try again"
+        log "ERROR" "Failed to download FFmpeg static binary from BtbN/FFmpeg-Builds"
+        log "ERROR" "Please check your internet connection and try again"
         return 1
     fi
     
@@ -358,7 +338,7 @@ show_usage() {
     echo "  $0 \$HOME/bin           # Install to user's bin directory"
     echo ""
     echo "Note: The script will automatically detect your system architecture"
-    echo "      and download the appropriate static binary from johnvansickle.com"
+    echo "      and download the appropriate static binary from BtbN/FFmpeg-Builds"
 }
 
 # Main script logic
@@ -372,37 +352,31 @@ case "$1" in
         ;;
 esac
 
-log "=========================================="
-log "FFmpeg Update Script"
-log "=========================================="
+log "INFO" "FFmpeg Update Script"
 
 # Check current FFmpeg version if available
 if command -v ffmpeg >/dev/null 2>&1; then
     CURRENT_VERSION=$(ffmpeg -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
-    log "Current FFmpeg version: $CURRENT_VERSION"
+    log "INFO" "Current FFmpeg version: $CURRENT_VERSION"
 else
-    log "FFmpeg not found in PATH, proceeding with installation"
+    log "INFO" "FFmpeg not found in PATH, proceeding with installation"
 fi
 
-log "Target installation directory: $INSTALL_DIR"
+log "INFO" "Target installation directory: $INSTALL_DIR"
 
 # Perform the update
 if install_ffmpeg_latest "$INSTALL_DIR"; then
-    log "=========================================="
-    log "FFmpeg update completed successfully!"
-    log "=========================================="
+    log "INFO" "FFmpeg update completed successfully!"
     
     # Show final version
     if command -v "$INSTALL_DIR/ffmpeg" >/dev/null 2>&1; then
         FINAL_VERSION=$("$INSTALL_DIR/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
-        log "Final FFmpeg version: $FINAL_VERSION"
+        log "INFO" "Final FFmpeg version: $FINAL_VERSION"
     fi
     
     exit 0
 else
-    log "=========================================="
-    log "FFmpeg update failed!"
-    log "=========================================="
+    log "ERROR" "FFmpeg update failed!"
     exit 1
 fi
 EOF
@@ -411,24 +385,34 @@ EOF
 RUN cat > /usr/local/bin/startup.sh << 'EOF'
 #!/bin/sh
 
+# Function to log with timestamp and level (matching YouCast logger format)
+log() {
+    local level="${1:-INFO}"
+    local message="$2"
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local level_padded=$(printf "%-5s" "$level")
+    local component_padded=$(printf "%-15s" "STARTUP")
+    echo "${timestamp} [${level_padded}] ${component_padded} ${message}"
+}
+
 # Run dependency updates on startup
 /usr/local/bin/update-deps.sh
 
 # Setup and start Supercronic at runtime
 setup_cron() {
     CURRENT_USER=$(whoami)
-    echo "[STARTUP] Setting up cron scheduler for user: $CURRENT_USER"
+    log "INFO" "Setting up cron scheduler for user: $CURRENT_USER"
     
     # Create cron file at runtime
     CRON_FILE="/tmp/youcast-cron"
     echo "0 * * * * CRON_TRIGGER=hourly /usr/local/bin/update-deps.sh" > "$CRON_FILE"
     
-    # Start Supercronic in background (rootless cron scheduler)
+    # Start Supercronic in background (rootless cron scheduler) - suppress its logs
     if command -v supercronic >/dev/null 2>&1; then
-        supercronic "$CRON_FILE" &
-        echo "[STARTUP] Supercronic started successfully - hourly dependency updates enabled"
+        supercronic "$CRON_FILE" >/dev/null 2>&1 &
+        log "INFO" "Supercronic started successfully - hourly dependency updates enabled"
     else
-        echo "[STARTUP] Warning: Supercronic not found. Dependency updates will only run on startup."
+        log "WARN" "Supercronic not found - dependency updates will only run on startup"
     fi
 }
 
@@ -439,8 +423,9 @@ setup_cron
 exec "$@"
 EOF
 
-# Make scripts executable and create directories
-RUN chmod +x /usr/local/bin/update-deps.sh /usr/local/bin/update-ffmpeg.sh /usr/local/bin/startup.sh
+# Make scripts executable and create directories for markers
+RUN chmod +x /usr/local/bin/update-deps.sh /usr/local/bin/update-ffmpeg.sh /usr/local/bin/startup.sh && \
+    mkdir -p /var/lib
 
 # NO USER directive - let docker-compose handle user management
 
