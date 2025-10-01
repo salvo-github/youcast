@@ -66,8 +66,9 @@ RUN apk add --no-cache \
     && rm -rf /var/cache/apk/*
 
 # Install latest FFmpeg from John Van Sickle's static builds (widely trusted, updated regularly)
+# Use /app/bin for both build-time and runtime (consistent, writable in rootless containers)
 RUN ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') && \
-    mkdir -p /var/lib && \
+    mkdir -p /var/lib /app/bin && \
     REMOTE_VERSION=$(curl -fsSL "https://johnvansickle.com/ffmpeg/release-readme.txt" 2>/dev/null | grep -i "version:" | head -1 | awk '{print $2}' || echo "unknown") && \
     echo "Remote FFmpeg version: $REMOTE_VERSION" && \
     if [ "$REMOTE_VERSION" != "unknown" ]; then \
@@ -75,9 +76,9 @@ RUN ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/') && \
         -o /tmp/ffmpeg.tar.xz && \
         mkdir -p /tmp/ffmpeg && \
         tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffmpeg --strip-components=1 && \
-        cp /tmp/ffmpeg/ffmpeg /usr/local/bin/ && \
-        cp /tmp/ffmpeg/ffprobe /usr/local/bin/ && \
-        chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
+        cp /tmp/ffmpeg/ffmpeg /app/bin/ && \
+        cp /tmp/ffmpeg/ffprobe /app/bin/ && \
+        chmod +x /app/bin/ffmpeg /app/bin/ffprobe && \
         echo "$REMOTE_VERSION" > /var/lib/ffmpeg-version && \
         rm -rf /tmp/ffmpeg*; \
     else \
@@ -103,8 +104,10 @@ COPY --from=builder /app/app.bundle.js ./
 COPY --from=builder /app/config ./config
 
 # Create symlink for config path resolution and make directories accessible
+# Make /app/bin writable for rootless container users to enable FFmpeg updates
 RUN ln -sf /app/config /config && \
-    chmod -R 755 /app
+    chmod -R 755 /app && \
+    chmod 777 /app/bin
 
 # Create update script for dependencies
 RUN cat > /usr/local/bin/update-deps.sh << 'EOF'
@@ -123,7 +126,10 @@ log() {
 
 # Reusable function to install/update FFmpeg from John Van Sickle's static builds
 install_ffmpeg_latest() {
-    local install_dir="${1:-/usr/local/bin}"
+    # Use /app/bin for both build-time and runtime updates (writable in rootless containers)
+    local install_dir="${1:-/app/bin}"
+    mkdir -p "$install_dir"
+    
     local temp_dir="/tmp/ffmpeg-update-$$"
     
     # Detect architecture for John Van Sickle builds (amd64 or arm64)
@@ -160,32 +166,33 @@ install_ffmpeg_latest() {
         
         # Extract and install
         if tar -xJf "$temp_dir/ffmpeg.tar.xz" -C "$temp_dir" --strip-components=1 2>/dev/null; then
-            # Check if we have write permissions to install directory
-            if [ -w "$install_dir" ] || [ "$(whoami)" = "root" ]; then
-                cp "$temp_dir/ffmpeg" "$install_dir/" && \
-                cp "$temp_dir/ffprobe" "$install_dir/" && \
-                chmod +x "$install_dir/ffmpeg" "$install_dir/ffprobe"
+            cp "$temp_dir/ffmpeg" "$install_dir/" && \
+            cp "$temp_dir/ffprobe" "$install_dir/" && \
+            chmod +x "$install_dir/ffmpeg" "$install_dir/ffprobe"
+            
+            # Verify installation
+            if command -v "$install_dir/ffmpeg" >/dev/null 2>&1; then
+                NEW_VERSION=$("$install_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
+                log "INFO" "FFmpeg updated to $NEW_VERSION"
                 
-                # Verify installation
-                if command -v "$install_dir/ffmpeg" >/dev/null 2>&1; then
-                    NEW_VERSION=$("$install_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
-                    log "INFO" "FFmpeg updated to $NEW_VERSION"
-                    
-                    # Save version to marker file
-                    echo "$NEW_VERSION" > /var/lib/ffmpeg-version 2>/dev/null || true
-                    
-                    # Update PATH if not already included
-                    case ":$PATH:" in
-                        *":$install_dir:"*) ;;
-                        *) export PATH="$install_dir:$PATH" ;;
-                    esac
-                else
-                    log "ERROR" "FFmpeg installation verification failed"
-                    rm -rf "$temp_dir"
-                    return 1
-                fi
+                # Save version to marker file
+                echo "$NEW_VERSION" > /var/lib/ffmpeg-version 2>/dev/null || true
+                
+                # Update PATH to prioritize this installation (prepend if not already first)
+                case ":$PATH:" in
+                    "$install_dir:"*) ;;  # Already first, do nothing
+                    *":$install_dir:"*) 
+                        # Remove from current position and prepend
+                        PATH=$(echo "$PATH" | sed "s|:$install_dir||g")
+                        export PATH="$install_dir:$PATH"
+                        ;;
+                    *) 
+                        # Not in PATH, prepend it
+                        export PATH="$install_dir:$PATH" 
+                        ;;
+                esac
             else
-                log "WARN" "No write permission to $install_dir"
+                log "ERROR" "FFmpeg installation verification failed"
                 rm -rf "$temp_dir"
                 return 1
             fi
@@ -257,10 +264,14 @@ log() {
 
 # Reusable function to install/update FFmpeg from John Van Sickle's static builds
 install_ffmpeg_latest() {
-    local install_dir="${1:-/usr/local/bin}"
+    # Use /app/bin for both build-time and runtime updates (writable in rootless containers)
+    local install_dir="${1:-/app/bin}"
+    mkdir -p "$install_dir"
+    
     local temp_dir="/tmp/ffmpeg-update-$$"
     
     log "INFO" "Checking FFmpeg version..."
+    log "INFO" "Target installation directory: $install_dir"
     
     # Detect architecture for John Van Sickle builds (amd64 or arm64)
     ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
@@ -304,38 +315,37 @@ install_ffmpeg_latest() {
         
         # Extract and install
         if tar -xJf "$temp_dir/ffmpeg.tar.xz" -C "$temp_dir" --strip-components=1 2>/dev/null; then
-            # Check if we have write permissions to install directory
-            if [ -w "$install_dir" ] || [ "$(whoami)" = "root" ]; then
-                cp "$temp_dir/ffmpeg" "$install_dir/" && \
-                cp "$temp_dir/ffprobe" "$install_dir/" && \
-                chmod +x "$install_dir/ffmpeg" "$install_dir/ffprobe"
+            cp "$temp_dir/ffmpeg" "$install_dir/" && \
+            cp "$temp_dir/ffprobe" "$install_dir/" && \
+            chmod +x "$install_dir/ffmpeg" "$install_dir/ffprobe"
+            
+            # Verify installation
+            if command -v "$install_dir/ffmpeg" >/dev/null 2>&1; then
+                NEW_VERSION=$("$install_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
+                log "INFO" "FFmpeg updated successfully to version: $NEW_VERSION"
                 
-                # Verify installation
-                if command -v "$install_dir/ffmpeg" >/dev/null 2>&1; then
-                    NEW_VERSION=$("$install_dir/ffmpeg" -version 2>/dev/null | head -n1 | awk '{print $3}' || echo "unknown")
-                    log "INFO" "FFmpeg updated successfully to version: $NEW_VERSION"
-                    
-                    # Save version to marker file
-                    echo "$NEW_VERSION" > /var/lib/ffmpeg-version 2>/dev/null || true
-                    
-                    # Update PATH if not already included
-                    case ":$PATH:" in
-                        *":$install_dir:"*) ;;
-                        *) export PATH="$install_dir:$PATH" ;;
-                    esac
-                    
-                    log "INFO" "FFmpeg binaries installed in: $install_dir"
-                    log "INFO" "FFmpeg version: $NEW_VERSION"
-                    return 0
-                else
-                    log "ERROR" "FFmpeg installation verification failed"
-                    rm -rf "$temp_dir"
-                    return 1
-                fi
+                # Save version to marker file
+                echo "$NEW_VERSION" > /var/lib/ffmpeg-version 2>/dev/null || true
+                
+                # Update PATH to prioritize this installation (prepend if not already first)
+                case ":$PATH:" in
+                    "$install_dir:"*) ;;  # Already first, do nothing
+                    *":$install_dir:"*) 
+                        # Remove from current position and prepend
+                        PATH=$(echo "$PATH" | sed "s|:$install_dir||g")
+                        export PATH="$install_dir:$PATH"
+                        ;;
+                    *) 
+                        # Not in PATH, prepend it
+                        export PATH="$install_dir:$PATH" 
+                        ;;
+                esac
+                
+                log "INFO" "FFmpeg binaries installed in: $install_dir"
+                log "INFO" "FFmpeg version: $NEW_VERSION"
+                return 0
             else
-                log "WARN" "No write permission to $install_dir, FFmpeg update skipped"
-                log "WARN" "Try running with appropriate permissions or specify a writable directory:"
-                log "WARN" "  $0 /path/to/writable/directory"
+                log "ERROR" "FFmpeg installation verification failed"
                 rm -rf "$temp_dir"
                 return 1
             fi
@@ -362,19 +372,19 @@ show_usage() {
     echo "Download and install the latest FFmpeg static binary"
     echo ""
     echo "Arguments:"
-    echo "  INSTALL_DIRECTORY  Directory to install FFmpeg binaries (default: /usr/local/bin)"
+    echo "  INSTALL_DIRECTORY  Directory to install FFmpeg binaries (default: /app/bin)"
     echo ""
     echo "Examples:"
-    echo "  $0                     # Install to /usr/local/bin (default)"
+    echo "  $0                     # Install to /app/bin (default, writable in rootless containers)"
     echo "  $0 /opt/ffmpeg/bin     # Install to custom directory"
     echo "  $0 \$HOME/bin           # Install to user's bin directory"
     echo ""
     echo "Note: The script will automatically detect your system architecture"
-    echo "      and download the appropriate static binary from BtbN/FFmpeg-Builds"
+    echo "      and download the appropriate static binary from John Van Sickle's builds"
 }
 
 # Main script logic
-INSTALL_DIR="${1:-/usr/local/bin}"
+INSTALL_DIR="${1:-}"
 
 # Handle help flags
 case "$1" in
@@ -489,7 +499,8 @@ ENV NODE_ENV=production \
     PORT=3000 \
     NODE_OPTIONS="--enable-source-maps=false --max-old-space-size=256" \
     NODE_TLS_REJECT_UNAUTHORIZED=1 \
-    TZ=UTC
+    TZ=UTC \
+    PATH="/app/bin:$PATH"
 
 EXPOSE 3000
 
