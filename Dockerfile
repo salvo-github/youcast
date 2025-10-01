@@ -104,12 +104,14 @@ RUN cat > /usr/local/bin/update-deps.sh << 'EOF'
 #!/bin/sh
 set -e
 
-# Function to log with timestamp and level
+# Function to log with timestamp and level (matching YouCast logger format)
 log() {
     local level="${1:-INFO}"
     local message="$2"
     local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-    echo "${timestamp} [${level}] UPDATE-DEPS ${message}"
+    local level_padded=$(printf "%-5s" "$level")
+    local component_padded=$(printf "%-15s" "UPDATE-DEPS")
+    echo "${timestamp} [${level_padded}] ${component_padded} ${message}"
 }
 
 # Reusable function to install/update FFmpeg from BtbN/FFmpeg-Builds
@@ -245,12 +247,14 @@ RUN cat > /usr/local/bin/update-ffmpeg.sh << 'EOF'
 #!/bin/sh
 set -e
 
-# Function to log with timestamp and level
+# Function to log with timestamp and level (matching YouCast logger format)
 log() {
     local level="${1:-INFO}"
     local message="$2"
     local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-    echo "${timestamp} [${level}] FFMPEG-UPDATE ${message}"
+    local level_padded=$(printf "%-5s" "$level")
+    local component_padded=$(printf "%-15s" "FFMPEG-UPDATE")
+    echo "${timestamp} [${level_padded}] ${component_padded} ${message}"
 }
 
 # Reusable function to install/update FFmpeg from BtbN/FFmpeg-Builds
@@ -381,24 +385,34 @@ EOF
 RUN cat > /usr/local/bin/startup.sh << 'EOF'
 #!/bin/sh
 
+# Function to log with timestamp and level (matching YouCast logger format)
+log() {
+    local level="${1:-INFO}"
+    local message="$2"
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local level_padded=$(printf "%-5s" "$level")
+    local component_padded=$(printf "%-15s" "STARTUP")
+    echo "${timestamp} [${level_padded}] ${component_padded} ${message}"
+}
+
 # Run dependency updates on startup
 /usr/local/bin/update-deps.sh
 
 # Setup and start Supercronic at runtime
 setup_cron() {
     CURRENT_USER=$(whoami)
-    echo "[STARTUP] Setting up cron scheduler for user: $CURRENT_USER"
+    log "INFO" "Setting up cron scheduler for user: $CURRENT_USER"
     
     # Create cron file at runtime
     CRON_FILE="/tmp/youcast-cron"
     echo "0 * * * * CRON_TRIGGER=hourly /usr/local/bin/update-deps.sh" > "$CRON_FILE"
     
-    # Start Supercronic in background (rootless cron scheduler)
+    # Start Supercronic in background (rootless cron scheduler) - suppress its logs
     if command -v supercronic >/dev/null 2>&1; then
-        supercronic "$CRON_FILE" &
-        echo "[STARTUP] Supercronic started successfully - hourly dependency updates enabled"
+        supercronic "$CRON_FILE" >/dev/null 2>&1 &
+        log "INFO" "Supercronic started successfully - hourly dependency updates enabled"
     else
-        echo "[STARTUP] Warning: Supercronic not found. Dependency updates will only run on startup."
+        log "WARN" "Supercronic not found - dependency updates will only run on startup"
     fi
 }
 
