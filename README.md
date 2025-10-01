@@ -51,6 +51,7 @@ services:
       - YOUTUBE_API_KEY=your_api_key
       - RSS_CACHE_DURATION=600
       - MIN_VIDEO_DURATION=300
+      - CRON=0 */6 * * *  # Check for updates every 6 hours (optional, defaults to hourly)
     restart: unless-stopped
 ```
 
@@ -131,6 +132,7 @@ Returns: `{"status": "OK", "timestamp": "2025-01-01T00:00:00.000Z"}`
 | `ALLOWED_ORIGINS` | - | Comma-separated CORS origins for production (if not set, **disables CORS** - no cross-origin requests allowed) |
 | `LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARN, ERROR) |
 | `DEFAULT_AUDIO_PROFILE` | `mp3` | Default audio extraction profile |
+| `CRON` | `0 * * * *` | Cron schedule for dependency updates (Docker only, standard cron format) |
 
 ## Dependencies
 
