@@ -1,6 +1,6 @@
 # YouCast
 
-Convert YouTube channels into podcast RSS feeds with on-demand audio extraction.
+Convert YouTube channels and playlists into podcast RSS feeds with on-demand audio extraction.
 
 ## Quick Start
 
@@ -63,7 +63,7 @@ GET /rss/{channelIdentifier}
 ```
 
 **Parameters:**
-- `channelIdentifier` - YouTube channel ID (e.g., `UC_x5XG1OV2P6uZZ5FSM9Ttw`), uploads playlist ID (e.g., `UU_x5XG1OV2P6uZZ5FSM9Ttw`), or handle (e.g., `@username`)
+- `channelIdentifier` - YouTube channel ID (e.g., `UC_x5XG1OV2P6uZZ5FSM9Ttw`), uploads playlist ID (e.g., `UU_x5XG1OV2P6uZZ5FSM9Ttw`), playlist ID (e.g., `PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf`), or handle (e.g., `@username`)
 
 **Query Parameters:**
 - `limit` - Number of episodes (default: `50`, max: `5000`, use `"none"` for maximum)
@@ -83,6 +83,9 @@ curl http://localhost:3000/rss/UC_x5XG1OV2P6uZZ5FSM9Ttw?limit=10&minDuration=300
 
 # All videos
 curl http://localhost:3000/rss/@channelname?limit=none
+
+# YouTube playlist
+curl http://localhost:3000/rss/PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf?limit=20
 ```
 
 ### Audio Streaming
@@ -117,9 +120,12 @@ Returns: `{"status": "OK", "timestamp": "2025-01-01T00:00:00.000Z"}`
 
 ## Usage
 
-1. **Add to Podcast App:** Use `http://your-server.com/rss/{channelIdentifier}` as the RSS feed URL
+1. **Add to Podcast App:** Use `http://your-server.com/rss/{channelIdentifier}` as the RSS feed URL (works with channels and playlists)
 2. **Stream Audio:** RSS episodes link to `/audio/{videoId}` for on-demand extraction
 3. **Caching:** RSS feeds are cached (default: 10 minutes) to reduce API calls
+
+### Playlist Support
+YouCast supports YouTube playlists (IDs starting with `PL`), allowing you to create podcast feeds from curated video collections. Each video in the playlist becomes an episode in your RSS feed. Note: Only public playlists are accessible.
 
 ## Environment Variables
 

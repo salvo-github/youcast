@@ -5,29 +5,29 @@ import { getChannelUUID } from './channelInfo.js';
 const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
 
 /**
- * Get recent videos from a YouTube uploads playlist
- * @param {string} uploadsPlaylistId - YouTube uploads playlist ID (required)
+ * Common function to fetch videos from any YouTube playlist (uploads or regular)
+ * @param {string} playlistId - YouTube playlist ID (UUxxxx or PLxxxx)
  * @param {Object} options - Configuration options
  * @param {number} options.limit - Number of videos to retrieve (default: 50, max: 5000)
  * @param {number} options.minDuration - Minimum duration (>0 means fetch detailed info for filtering)
- * @returns {Object} Object with videos array and channel info extracted from playlist
+ * @returns {Object} Object with videos array and raw playlist data
  */
-async function getChannelVideos(uploadsPlaylistId, options = {}) {
-  const { limit = 50, minDuration = 0, providedChannelInfo = null } = options;
+async function fetchVideosFromPlaylist(playlistId, options = {}) {
+  const { limit = 50, minDuration = 0 } = options;
   
   try {
-    logger.debug('YouTube', `Getting videos from playlist: ${uploadsPlaylistId}`, { limit, minDuration });
+    logger.debug('YouTube', `Fetching videos from playlist: ${playlistId}`, { limit, minDuration });
 
     // Fetch videos with pagination support (up to 5,000 videos max per playlist)
     const maxLimit = Math.min(limit, 5000);
     const videos = [];
     let nextPageToken = '';
     let totalFetched = 0;
-    let channelInfo = providedChannelInfo; // Use channel info from getChannelUUID if available
+    let firstPlaylistItem = null; // Store first item for metadata extraction
     
     while (totalFetched < maxLimit) {
       const batchSize = Math.min(50, maxLimit - totalFetched);
-      const playlistUrl = `${YOUTUBE_API_BASE}/playlistItems?part=snippet&playlistId=${uploadsPlaylistId}&maxResults=${batchSize}&order=date${nextPageToken ? `&pageToken=${nextPageToken}` : ''}&key=${process.env.YOUTUBE_API_KEY}`;
+      const playlistUrl = `${YOUTUBE_API_BASE}/playlistItems?part=snippet&playlistId=${playlistId}&maxResults=${batchSize}&order=date${nextPageToken ? `&pageToken=${nextPageToken}` : ''}&key=${process.env.YOUTUBE_API_KEY}`;
       
       const playlistResponse = await fetch(playlistUrl);
       const playlistData = await playlistResponse.json();
@@ -36,7 +36,7 @@ async function getChannelVideos(uploadsPlaylistId, options = {}) {
         logger.error('YouTube', 'Playlist API error', { 
           status: playlistResponse.status, 
           error: playlistData.error, 
-          playlistId: uploadsPlaylistId 
+          playlistId: playlistId 
         });
         throw new Error(`YouTube API error: ${playlistData.error?.message || 'Unknown error'}`);
       }
@@ -45,16 +45,9 @@ async function getChannelVideos(uploadsPlaylistId, options = {}) {
         break; // No more videos
       }
 
-      // Extract channel info from first video only if not provided by getChannelUUID
-      if (!channelInfo && playlistData.items.length > 0) {
-        const firstItem = playlistData.items[0];
-        channelInfo = {
-          id: firstItem.snippet.channelId,
-          title: firstItem.snippet.channelTitle,
-          description: '', // Not available in playlistItems
-          thumbnail: '' // Not available in playlistItems
-        };
-        logger.debug('YouTube', `Extracted basic channel info from playlist: ${channelInfo.title}`, { channelId: channelInfo.id });
+      // Store first playlist item for metadata extraction (by caller)
+      if (!firstPlaylistItem && playlistData.items.length > 0) {
+        firstPlaylistItem = playlistData.items[0];
       }
 
       // Always collect video IDs first
@@ -115,21 +108,112 @@ async function getChannelVideos(uploadsPlaylistId, options = {}) {
     
     logger.info('YouTube', `Successfully fetched ${videos.length} videos`, { 
       videosCount: videos.length,
-      playlistId: uploadsPlaylistId
+      playlistId: playlistId
     });
 
     return {
       videos,
       totalVideos: videos.length,
       hasMore: !!nextPageToken && videos.length < limit,
-      channelInfo // Include channel info extracted from playlist
+      firstPlaylistItem // Return first item for metadata extraction
     };
 
   } catch (error) {
     logger.error('YouTube', 'Error fetching playlist videos', { 
       error: error.message, 
-      playlistId: uploadsPlaylistId,
+      playlistId: playlistId,
       limit
+    });
+    throw error;
+  }
+}
+
+/**
+ * Get recent videos from a YouTube channel uploads playlist
+ * @param {string} uploadsPlaylistId - YouTube uploads playlist ID (UUxxxx)
+ * @param {Object} options - Configuration options
+ * @param {number} options.limit - Number of videos to retrieve (default: 50, max: 5000)
+ * @param {number} options.minDuration - Minimum duration (>0 means fetch detailed info for filtering)
+ * @param {Object} options.providedChannelInfo - Channel info from getChannelUUID if available
+ * @returns {Object} Object with videos array and channel info
+ */
+async function getChannelVideos(uploadsPlaylistId, options = {}) {
+  const { providedChannelInfo = null } = options;
+  
+  try {
+    logger.debug('YouTube', `Getting channel videos from uploads playlist: ${uploadsPlaylistId}`);
+    
+    // Fetch videos using common function
+    const result = await fetchVideosFromPlaylist(uploadsPlaylistId, options);
+    
+    // Extract channel info from first video or use provided info
+    let channelInfo = providedChannelInfo;
+    if (!channelInfo && result.firstPlaylistItem) {
+      const firstItem = result.firstPlaylistItem;
+      channelInfo = {
+        id: firstItem.snippet.channelId,
+        title: firstItem.snippet.channelTitle,
+        description: '', // Not available in playlistItems
+        thumbnail: '' // Not available in playlistItems
+      };
+      logger.debug('YouTube', `Extracted channel info from playlist: ${channelInfo.title}`, { channelId: channelInfo.id });
+    }
+    
+    return {
+      videos: result.videos,
+      totalVideos: result.totalVideos,
+      hasMore: result.hasMore,
+      channelInfo
+    };
+    
+  } catch (error) {
+    logger.error('YouTube', 'Error in getChannelVideos', { 
+      error: error.message, 
+      uploadsPlaylistId
+    });
+    throw error;
+  }
+}
+
+/**
+ * Get videos from a YouTube playlist (non-uploads playlist)
+ * @param {string} playlistId - YouTube playlist ID (PLxxxx)
+ * @param {Object} options - Configuration options
+ * @param {number} options.limit - Number of videos to retrieve (default: 50, max: 5000)
+ * @param {number} options.minDuration - Minimum duration (>0 means fetch detailed info for filtering)
+ * @returns {Object} Object with videos array and playlist info
+ */
+async function getPlaylistVideos(playlistId, options = {}) {
+  try {
+    logger.debug('YouTube', `Getting playlist videos: ${playlistId}`);
+    
+    // Fetch videos using common function
+    const result = await fetchVideosFromPlaylist(playlistId, options);
+    
+    // Extract playlist info from first video
+    let playlistInfo = null;
+    if (result.firstPlaylistItem) {
+      const firstItem = result.firstPlaylistItem;
+      playlistInfo = {
+        id: playlistId,
+        title: firstItem.snippet?.playlistTitle || firstItem.snippet?.channelTitle || 'YouTube Playlist',
+        description: 'Podcast feed for YouTube playlist',
+        thumbnail: firstItem.snippet?.thumbnails?.high?.url || firstItem.snippet?.thumbnails?.default?.url || ''
+      };
+      logger.debug('YouTube', `Extracted playlist info: ${playlistInfo.title}`);
+    }
+    
+    return {
+      videos: result.videos,
+      totalVideos: result.totalVideos,
+      hasMore: result.hasMore,
+      channelInfo: playlistInfo // Use playlistInfo as channelInfo for RSS generation
+    };
+    
+  } catch (error) {
+    logger.error('YouTube', 'Error in getPlaylistVideos', { 
+      error: error.message, 
+      playlistId
     });
     throw error;
   }
@@ -149,17 +233,27 @@ async function getChannelWithVideos(channelIdentifier, options = {}) {
   const { limit: videoLimit = 50, minDuration = 0 } = options;
   
   try {
-    logger.debug('YouTube', `Getting channel with videos: ${channelIdentifier}`, { videoLimit, minDuration });
+    logger.debug('YouTube', `Getting content with videos: ${channelIdentifier}`, { videoLimit, minDuration });
     
-    // Step 1: Resolve any channel identifier to uploads playlist ID
-    const { uploadsPlaylistId, channelInfo: providedChannelInfo } = await getChannelUUID(channelIdentifier);
+    // Step 1: Resolve channel identifier or detect playlist
+    const { uploadsPlaylistId, channelInfo: providedChannelInfo, isPlaylist } = await getChannelUUID(channelIdentifier);
     
-    // Step 2: Get videos using the uploads playlist ID
-    const videoResults = await getChannelVideos(uploadsPlaylistId, { 
-      limit: videoLimit,
-      minDuration,
-      providedChannelInfo
-    });
+    // Step 2: Route to appropriate handler based on type
+    let videoResults;
+    if (isPlaylist) {
+      logger.debug('YouTube', `Routing to playlist handler for: ${uploadsPlaylistId}`);
+      videoResults = await getPlaylistVideos(uploadsPlaylistId, { 
+        limit: videoLimit,
+        minDuration
+      });
+    } else {
+      logger.debug('YouTube', `Routing to channel handler for: ${uploadsPlaylistId}`);
+      videoResults = await getChannelVideos(uploadsPlaylistId, { 
+        limit: videoLimit,
+        minDuration,
+        providedChannelInfo
+      });
+    }
     
     // Apply duration filtering if specified
     let filteredVideos = videoResults.videos;
@@ -189,11 +283,12 @@ async function getChannelWithVideos(channelIdentifier, options = {}) {
     // Use the best available channel info
     const finalChannelInfo = videoResults.channelInfo;
 
-    logger.info('YouTube', `Successfully retrieved channel with videos`, {
-      channelId: finalChannelInfo.id,
-      channelTitle: finalChannelInfo.title,
+    logger.info('YouTube', `Successfully retrieved content with videos`, {
+      contentId: finalChannelInfo.id,
+      contentTitle: finalChannelInfo.title,
       videosCount: filteredVideos.length,
-      minDuration
+      minDuration,
+      isPlaylist: isPlaylist || false
     });
     
     return {
