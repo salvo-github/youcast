@@ -43,21 +43,21 @@ router.get('/:channelIdentifier', async (req, res) => {
     
     // Get profile configuration (all validation/fallback handled internally)
     const { profile, profileConfig } = getProfileConfig(req.query.profile);
-    logger.operation('RSS', `Generating RSS feed for channel: ${channelIdentifier}`, { 
+    logger.operation('RSS', `Generating RSS feed for: ${channelIdentifier}`, { 
       limit, 
       profile, 
       minDuration 
     });
 
-    // Validate channel identifier format (can be channel ID, uploads playlist ID, or handle)
+    // Validate identifier format (can be channel ID, uploads playlist ID, regular playlist ID, or handle)
     if (!channelIdentifier || channelIdentifier.length < 3) {
       return res.status(400).json({ 
-        error: 'Invalid channel identifier',
-        message: 'Channel identifier must be a valid YouTube channel ID (UCxxx), uploads playlist ID (UUxxx), or handle (@channelname)' 
+        error: 'Invalid identifier',
+        message: 'Identifier must be a valid YouTube channel ID (UCxxx), uploads playlist ID (UUxxx), playlist ID (PLxxx), or handle (@channelname)' 
       });
     }
 
-    logger.debug('RSS', `Fetching channel with videos: ${channelIdentifier}`);
+    logger.debug('RSS', `Fetching content with videos: ${channelIdentifier}`);
     
     // Let YouTube utils handle all optimization logic
     const result = await getChannelWithVideos(channelIdentifier, { 
@@ -68,10 +68,10 @@ router.get('/:channelIdentifier', async (req, res) => {
     const { channel: channelInfo, videos } = result;
     
     if (!channelInfo) {
-      logger.warn('RSS', `Channel not found: ${channelIdentifier}`);
+      logger.warn('RSS', `Content not found: ${channelIdentifier}`);
       return res.status(404).json({ 
-        error: 'Channel not found',
-        message: `Unable to find YouTube channel with identifier: ${channelIdentifier}. Please verify the channel handle or ID is correct.` 
+        error: 'Content not found',
+        message: `Unable to find YouTube channel or playlist with identifier: ${channelIdentifier}. Please verify the identifier is correct.` 
       });
     }
 
@@ -80,10 +80,10 @@ router.get('/:channelIdentifier', async (req, res) => {
     });
 
     if (!videos || videos.length === 0) {
-      logger.warn('RSS', `No videos found for channel: ${channelInfo.title}`, { channelId: channelInfo.id });
+      logger.warn('RSS', `No videos found for: ${channelInfo.title}`, { id: channelInfo.id });
       return res.status(404).json({ 
         error: 'No videos found',
-        message: 'No videos found for this channel' 
+        message: 'No videos found for this channel or playlist' 
       });
     }
 
@@ -107,7 +107,7 @@ router.get('/:channelIdentifier', async (req, res) => {
     res.send(rssXML);
 
   } catch (error) {
-    logger.error('RSS', 'RSS generation failed', { error: error.message, channelIdentifier });
+    logger.error('RSS', 'RSS generation failed', { error: error.message, channelIdentifier: req.params.channelIdentifier });
     res.status(500).json({ 
       error: 'Failed to generate RSS feed',
       message: error.message 

@@ -15,6 +15,16 @@ export async function getChannelUUID(channelIdentifier) {
     throw new Error('YouTube API key not configured');
   }
 
+  // If it's PLxxxx (regular playlist), return as is with playlist flag
+  if (channelIdentifier.startsWith('PL')) {
+    logger.debug('YouTube', `Playlist ID detected: ${channelIdentifier}`);
+    return {
+      uploadsPlaylistId: channelIdentifier,
+      channelInfo: null, // No API call made, no channel info available
+      isPlaylist: true // Flag to indicate it's a playlist
+    };
+  }
+  
   // If it's UUxxxx just give it back as is
   if (channelIdentifier.startsWith('UU') && channelIdentifier.length === 24) {
     logger.debug('YouTube', `Direct uploads playlist ID: ${channelIdentifier}`);
