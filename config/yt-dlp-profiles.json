@@ -27,7 +27,8 @@
     "fileExtension": "mp3",
     "postprocessorArgs": "ffmpeg:-threads 0 -c:a libmp3lame -b:a 32k -ac 1 -ar 22050 -q:a 7",
     "additionalArgs": [
-      "--no-playlist"
+      "--no-playlist",
+      "--extractor-args", "youtube:player_client=default,-tv"
     ]
   },
   "high_quality_opus": {
