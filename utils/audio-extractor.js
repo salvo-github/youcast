@@ -41,9 +41,8 @@ async function extractAudioStream(videoId, profile, profileConfig) {
         // Step 1: yt-dlp extracts raw audio
         const ytdlpArgs = [
           '-N', cpuCount.toString(),
-          '-f', 'bestaudio',
           '--output', '-',
-          '--no-playlist',
+          ...(profileConfig.additionalArgs || []),
           videoUrl
         ];
         
