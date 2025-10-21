@@ -44,6 +44,7 @@ async function extractAudioStream(videoId, profile, profileConfig) {
           '-f', 'bestaudio',
           '--output', '-',
           '--no-playlist',
+          ...(profileConfig.additionalArgs || []),
           videoUrl
         ];
         
