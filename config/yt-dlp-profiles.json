@@ -7,7 +7,8 @@
     "postprocessorArgs": "",
     "additionalArgs": [
       "--no-playlist",
-      "--format", "bestaudio[ext=webm]/bestaudio"
+      "--format", "bestaudio[ext=webm]/bestaudio",
+      "--extractor-args", "youtube:player_client=android"
     ]
   },
   "opus": {
@@ -17,7 +18,9 @@
     "fileExtension": "ogg",
     "postprocessorArgs": "ffmpeg:-threads 0 -c:a libopus -b:a 20k -vbr on -application voip -frame_duration 20 -ac 1 -ar 16000",
     "additionalArgs": [
-      "--no-playlist"
+      "--no-playlist",
+      "--format", "bestaudio/best",
+      "--extractor-args", "youtube:player_client=android"
     ]
   },
   "mp3": {
@@ -27,7 +30,9 @@
     "fileExtension": "mp3",
     "postprocessorArgs": "ffmpeg:-threads 0 -c:a libmp3lame -b:a 32k -ac 1 -ar 22050 -q:a 7",
     "additionalArgs": [
-      "--no-playlist"
+      "--no-playlist",
+      "--format", "bestaudio/best",
+      "--extractor-args", "youtube:player_client=android"
     ]
   },
   "high_quality_opus": {
@@ -37,7 +42,9 @@
     "fileExtension": "ogg",
     "postprocessorArgs": "ffmpeg:-threads 0 -c:a libopus -b:a 32k -vbr on -application voip -frame_duration 20 -ac 1 -ar 24000",
     "additionalArgs": [
-      "--no-playlist"
+      "--no-playlist",
+      "--format", "bestaudio/best",
+      "--extractor-args", "youtube:player_client=android"
     ]
   },
   "aac": {
@@ -47,7 +54,9 @@
     "fileExtension": "aac",
     "postprocessorArgs": "ffmpeg:-threads 0 -c:a aac -b:a 32k -ac 1 -ar 22050 -profile:a aac_he",
     "additionalArgs": [
-      "--no-playlist"
+      "--no-playlist",
+      "--format", "bestaudio/best",
+      "--extractor-args", "youtube:player_client=android"
     ]
   }
 }
